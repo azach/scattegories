@@ -1039,9 +1039,9 @@ function fallbackCopy(text, cb) {
 
 /* ---------------- Trystero networking ---------------- */
 const TS_CANDIDATES = [
-  "https://esm.sh/trystero/nostr",
-  "https://esm.sh/trystero/mqtt",
-  "https://esm.sh/trystero"
+  "https://esm.sh/trystero@0.25.4/nostr",
+  "https://esm.sh/trystero@0.25.4/mqtt",
+  "https://esm.sh/trystero@0.25.4"
 ];
 async function loadTrystero() {
   if (TS) return TS;
@@ -1069,29 +1069,34 @@ async function joinRoomNet(roomId) {
     room = mod.joinRoom({ appId: "the-letter-round-v1", password: roomId }, roomId);
   } catch (e) { netOffline = true; onNetStatus(); return; }
 
-  const [sendHello, getHello] = room.makeAction("hello");
-  const [sendState, getState] = room.makeAction("state");
-  const [sendAns, getAns] = room.makeAction("ans");
-  net = { room, sendHello, sendState, sendAns };
+  // Trystero 0.25 API: makeAction returns an object; send targets a peer via { target }.
+  const helloAct = room.makeAction("hello");
+  const stateAct = room.makeAction("state");
+  const ansAct = room.makeAction("ans");
+  const mkSend = (act) => (payload, target) => act.send(payload, target ? { target } : undefined);
+  net = { room, sendHello: mkSend(helloAct), sendState: mkSend(stateAct), sendAns: mkSend(ansAct) };
   netOffline = false; netReady = true;
 
-  getHello((data, peerId) => {
+  helloAct.onMessage = (data, meta) => {
+    const peerId = meta && meta.peerId;
+    if (!peerId) return;
     roster[peerId] = { name: (data && data.name) || "Player", created: !!(data && data.created) };
     onNetStatus();
     if (isHost() && state.start) { try { net.sendState(roundPayload(), peerId); } catch {} }
     if (myAnswersShared && document.body.classList.contains("review")) { try { net.sendAns(answerPayload(), peerId); } catch {} }
-  });
-  getState((data) => {
+  };
+  stateAct.onMessage = (data) => {
     if (!data || typeof data.startAt !== "number") return;
     if (state.seed && typeof data.round === "number" && data.round <= state.round) return; // ignore stale/duplicate
     applyRound(data.seed, data.startAt, data.round);
-  });
-  getAns((data, peerId) => {
-    if (!data) return;
+  };
+  ansAct.onMessage = (data, meta) => {
+    const peerId = meta && meta.peerId;
+    if (!data || !peerId) return;
     const fallbackName = (roster[peerId] && roster[peerId].name) || "Player";
     peerAnswers[peerId] = { name: data.name || fallbackName, answers: data.answers || {}, round: data.round };
     if (document.body.classList.contains("review")) renderReview();
-  });
+  };
 
   room.onPeerJoin(peerId => { try { net.sendHello(helloPayload(), peerId); } catch {} onNetStatus(); });
   room.onPeerLeave(peerId => {
