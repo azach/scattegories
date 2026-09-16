@@ -323,10 +323,10 @@
   .codepill.offline .status { background: var(--hot); }
   .codepill .count { color: var(--muted); }
 
-  /* lobby */
+  /* lobby (body.inlobby is the state class; .lobby is the container — keep them distinct) */
   .lobby { display: none; }
-  body.lobby .lobby { display: block; }
-  body.lobby .board, body.lobby .sheet, body.lobby .totalbar, body.lobby .buzzer { display: none !important; }
+  body.inlobby .lobby { display: block; }
+  body.inlobby .board, body.inlobby .sheet, body.inlobby .totalbar, body.inlobby .buzzer { display: none !important; }
   .lobby .eyebrow { margin-bottom: 10px; }
   .namerow { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 18px; }
   .namerow label { font-size: 13px; color: var(--muted); }
@@ -790,7 +790,7 @@ function enterRoom(roomId, created) {
   homeEl.style.display = "none";
   gameEl.style.display = "block";
   document.body.classList.remove("review", "critical", "panic");
-  document.body.classList.add("lobby");
+  document.body.classList.add("inlobby");
   buzzerEl.classList.remove("show");
   letterEl.textContent = "?";
   roomCode.textContent = roomId.toUpperCase();
@@ -815,7 +815,7 @@ function applyRound(seed, startAt, round) {
   peerAnswers = {};
   myAnswersShared = false;
 
-  document.body.classList.remove("lobby", "review", "critical", "panic");
+  document.body.classList.remove("inlobby", "review", "critical", "panic");
   buzzerEl.classList.remove("show");
   letterEl.textContent = "?";
   renderSheet();
@@ -853,7 +853,7 @@ function endRound() {
 }
 
 function enterReview() {
-  document.body.classList.remove("lobby");
+  document.body.classList.remove("inlobby");
   document.body.classList.add("review");
   setInputsEnabled(false);
   buzzerEl.classList.add("show");
@@ -1098,12 +1098,12 @@ async function joinRoomNet(roomId) {
     if (document.body.classList.contains("review")) renderReview();
   };
 
-  room.onPeerJoin(peerId => { try { net.sendHello(helloPayload(), peerId); } catch {} onNetStatus(); });
-  room.onPeerLeave(peerId => {
+  room.onPeerJoin = (peerId) => { try { net.sendHello(helloPayload(), peerId); } catch {} onNetStatus(); };
+  room.onPeerLeave = (peerId) => {
     delete roster[peerId]; delete peerAnswers[peerId];
     onNetStatus();
     if (document.body.classList.contains("review")) renderReview();
-  });
+  };
 
   try { net.sendHello(helloPayload()); } catch {}
   onNetStatus();
@@ -1124,9 +1124,9 @@ function hostId() {
   return all.map(p => p.id).sort()[0];
 }
 function isHost() {
-  if (netOffline) return true;           // solo / offline: you host yourself
-  if (!netReady) return !!state.created; // while connecting, the creator hosts
-  return hostId() === (mySelfId || "self");
+  if (netOffline) return true;                                  // solo / offline: you host yourself
+  if (Object.keys(roster).length === 0) return !!state.created; // alone in the room: only the creator hosts
+  return hostId() === (mySelfId || "self");                     // with peers: creator wins (via hello.created), else lowest id
 }
 
 /* ---------------- Presence / roster / name ---------------- */
@@ -1241,7 +1241,7 @@ function showHome() {
   stopTicker(); stopKlaxon();
   gameEl.style.display = "none";
   homeEl.style.display = "block";
-  document.body.classList.remove("review", "critical", "panic", "lobby");
+  document.body.classList.remove("review", "critical", "panic", "inlobby");
   state = { room: null, created: false, round: 0, seed: null, start: null, cats: [], letter: "", ended: false, revealed: false, phase: null };
 }
 
