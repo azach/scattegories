@@ -183,13 +183,9 @@
   .codepill {
     display: inline-flex; align-items: center; gap: 8px;
     background: var(--surface); border: 1px solid var(--line);
-    border-radius: 999px; padding: 6px 8px 6px 14px; font-size: 13px; color: var(--muted);
+    border-radius: 999px; padding: 6px 14px; font-size: 13px; color: var(--muted);
   }
   .codepill .val { font-family: 'JetBrains Mono', monospace; font-weight: 700; color: var(--ink); letter-spacing: .12em; }
-  .codepill button {
-    border: none; background: var(--accent); color: var(--accent-ink);
-    border-radius: 999px; padding: 5px 11px; font-size: 12px; font-weight: 700;
-  }
 
   /* marquee / hero board */
   .board {
@@ -334,7 +330,7 @@
           <input class="code grow" id="joinInput" placeholder="…or paste a game link or room code" autocomplete="off" spellcheck="false">
           <button class="btn" id="joinBtn">Join</button>
         </div>
-        <div class="hint">Tip: everyone opening the same link plays the same round. Pressing <b>Start</b> opens a 30-second window to share the link — then the letter is revealed to everyone at once and the 3:00 begins.</div>
+        <div class="hint">Tip: everyone opening the same link plays the same round. Pressing <b>Start</b> opens a 20-second window to share the link — then the letter is revealed to everyone at once and the 3:00 begins.</div>
       </div>
 
       <div class="steps">
@@ -358,7 +354,6 @@
       </div>
       <div class="codepill">
         room <span class="val" id="roomCode">—</span>
-        <button id="shareBtn">Copy link</button>
       </div>
     </div>
 
@@ -663,7 +658,7 @@ function renderControls() {
     start.className = "btn primary"; start.textContent = "Start round";
     start.addEventListener("click", startRound);
     controlsEl.appendChild(start);
-    boardHint.textContent = "Press start for a 30-second window to share the link — then the letter is revealed to everyone at once and the 3:00 begins.";
+    boardHint.textContent = `Press start for a ${BUFFER_MS / 1000}-second window to share the link — then the letter is revealed to everyone at once and the 3:00 begins.`;
   } else if (phase === "buffer") {
     addCopy("Copy synced link");
     boardHint.textContent = "Send this link now — everyone who opens it gets the same letter the instant the round begins.";
@@ -744,7 +739,7 @@ function startRound() {
   letterEl.textContent = "?";
   writeHash(state.seed, state.start);
   startTicker();
-  copyLink(true, "Link copied — round starts in 30s. Send it now!");
+  copyLink(true, `Link copied — round starts in ${BUFFER_MS / 1000}s. Send it now!`);
 }
 
 function endRound() {
@@ -824,7 +819,6 @@ function doJoin() {
 $("joinBtn").addEventListener("click", doJoin);
 $("joinInput").addEventListener("keydown", e => { if (e.key === "Enter") doJoin(); });
 
-$("shareBtn").addEventListener("click", () => copyLink(!!state.start));
 $("homeBtn").addEventListener("click", () => { stopTicker(); location.hash = ""; showHome(); });
 $("againBtn").addEventListener("click", () => {
   const seed = newSeed();
