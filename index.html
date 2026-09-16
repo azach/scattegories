@@ -317,6 +317,42 @@
   }
   .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
+  /* presence pill */
+  .codepill .status { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+  .codepill.online .status { background: var(--good); }
+  .codepill.offline .status { background: var(--hot); }
+  .codepill .count { color: var(--muted); }
+
+  /* lobby */
+  .lobby { display: none; }
+  body.lobby .lobby { display: block; }
+  body.lobby .board, body.lobby .sheet, body.lobby .totalbar, body.lobby .buzzer { display: none !important; }
+  .lobby .eyebrow { margin-bottom: 10px; }
+  .namerow { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 18px; }
+  .namerow label { font-size: 13px; color: var(--muted); }
+  .namerow input { flex: 1 1 160px; }
+  .roster { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 18px; }
+  .player {
+    display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 10px; font-weight: 600;
+  }
+  .player .badge {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 700; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--accent-ink); background: var(--accent); border-radius: 999px; padding: 2px 8px;
+  }
+  .player .me { margin-left: auto; color: var(--faint); font-weight: 500; font-size: 12px; }
+  .waiting { color: var(--muted); font-size: 14px; }
+  .offline-note { color: var(--hot); font-size: 13px; margin-top: 10px; }
+
+  /* multiplayer review grid (rendered into .item) */
+  .answers { display: flex; flex-direction: column; gap: 5px; margin-top: 2px; }
+  .ansrow { display: flex; gap: 10px; align-items: baseline; font-size: 15px; }
+  .ansrow .who { font-size: 11px; color: var(--faint); min-width: 66px; font-weight: 600; flex: none; }
+  .ansrow .val2 { color: var(--ink); word-break: break-word; }
+  .ansrow.dupe .val2 { color: var(--muted); text-decoration: line-through; }
+  .ansrow.dupe .who::after { content: " ·dup"; color: var(--faint); }
+  .ansrow.blank .val2 { color: var(--faint); font-style: italic; }
+
   @media (max-width: 620px) {
     .board { grid-template-columns: 1fr; }
     .tile { width: 100%; max-width: 200px; margin: 0 auto; aspect-ratio: 16/10; }
@@ -340,7 +376,7 @@
       <h1 class="marquee">
         <span>THE&nbsp;</span><span class="lit">LETTER&nbsp;</span><span>ROUND</span>
       </h1>
-      <p class="lede">Twelve categories. One letter. Three minutes. Share the link — everyone gets the exact same board and a synced countdown, straight from a static web page.</p>
+      <p class="lede">Twelve categories. One letter. Three minutes. Share one room link — everyone plays the same board on a synced clock, then sees each other's answers when time's up. Peer-to-peer, no server.</p>
     </div>
 
     <div class="panel">
@@ -350,18 +386,18 @@
           <input class="code grow" id="joinInput" placeholder="…or paste a game link or room code" autocomplete="off" spellcheck="false">
           <button class="btn" id="joinBtn">Join</button>
         </div>
-        <div class="hint">Tip: everyone opening the same link plays the same round. Pressing <b>Start</b> opens a 30-second window to share the link — then the letter is revealed to everyone at once and the 3:00 begins.</div>
+        <div class="hint">Tip: everyone opens the same room link and lands in the lobby. The host starts the round; the letter is revealed to all at once and the 3:00 begins together.</div>
       </div>
 
       <div class="steps">
-        <div class="step"><div class="n">1</div><b>Create &amp; share</b><p>Start a game and send the link to your friends — anywhere in the world.</p></div>
-        <div class="step"><div class="n">2</div><b>Beat the clock</b><p>Fill an answer for each category that begins with the chosen letter, before 3:00 runs out.</p></div>
-        <div class="step"><div class="n">3</div><b>Read &amp; score</b><p>Take turns reading answers aloud. Tick the ones nobody else matched — 1 point each.</p></div>
+        <div class="step"><div class="n">1</div><b>Open a room</b><p>Start a game and send the room link to your friends — anywhere in the world. It stays the same all night.</p></div>
+        <div class="step"><div class="n">2</div><b>Beat the clock</b><p>The host starts the round. Fill an answer for each category that begins with the chosen letter before 3:00 runs out.</p></div>
+        <div class="step"><div class="n">3</div><b>Compare &amp; score</b><p>At time-up everyone's answers appear side by side, duplicates flagged. Tick the ones only you got — 1 point each.</p></div>
       </div>
     </div>
 
     <div class="footer">
-      <span>Deterministic board from the link · answers stay on your device</span>
+      <span>Peer-to-peer over WebRTC · nothing stored on a server</span>
       <button class="themebtn" data-theme-toggle>Theme</button>
     </div>
   </section>
@@ -372,8 +408,24 @@
       <button class="brandmini" id="brandHome" type="button" title="Back to home" aria-label="Back to home">
         <b>THE LETTER ROUND</b>
       </button>
-      <div class="codepill">
+      <div class="codepill" id="codepill">
+        <span class="status" aria-hidden="true"></span>
         room <span class="val" id="roomCode">—</span>
+        <span class="count" id="playerCount"></span>
+      </div>
+    </div>
+
+    <div class="lobby">
+      <div class="panel">
+        <div class="eyebrow">Lobby</div>
+        <div class="namerow">
+          <label for="nameInput">Your name</label>
+          <input class="code" id="nameInput" maxlength="20" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="roster" id="roster"></div>
+        <div class="controls" id="lobbyControls"></div>
+        <div class="hint" id="lobbyHint" style="margin-top:10px;"></div>
+        <div class="offline-note" id="offlineNote" hidden>Couldn't reach the sync network — playing offline. Others won't see this game.</div>
       </div>
     </div>
 
@@ -409,14 +461,11 @@
         <div class="eyebrow">your round</div>
         <div class="score"><b id="scoreNum">0</b> / 12 points</div>
       </div>
-      <div class="controls">
-        <button class="btn" id="againBtn">New letter &amp; categories</button>
-        <button class="btn ghost" id="replayBtn">Reset this board</button>
-      </div>
+      <div class="controls" id="reviewControls"></div>
     </div>
 
     <div class="footer">
-      <span>Answers stay on your device · read aloud to score</span>
+      <span>Peer-to-peer · no server · answers shared only when time's up</span>
       <button class="themebtn" data-theme-toggle>Theme</button>
     </div>
   </section>
@@ -448,7 +497,7 @@ const CATEGORIES = [
   "Things that use electricity","Reasons to make a phone call","Things you shouldn't touch","US states",
   "Video games","Kinds of pasta","Things with wheels","A bad habit","Items in a fridge","Camping gear",
   "Comic characters","Kinds of hat","Spices & herbs","Things you can't live without","Farm animals",
-  "Reasons to smile","Amusement-park attractions","Things you find in a wallet","Types of bread",
+  "Reasons to smile","Amusement-park attractions","Things you find in a purse","Types of bread",
   "Cocktails & mocktails","Something you throw away","Zoo animals","Gym equipment","Types of pie",
   "Things that are green","Words that describe people","Magazines & newspapers","Things you inherit",
   "Modes of transport","Something that comes in pairs","Things you recycle","Constellations & planets",
@@ -467,7 +516,7 @@ const CATEGORIES = [
 const LETTERS = "ABCDEFGHIJKLMNOPRSTW"; // classic die: skips Q,U,V,X,Y,Z
 const CATS_PER_GAME = 12;
 const DURATION_MS = 3 * 60 * 1000;
-const BUFFER_MS = 30 * 1000; // share window before the letter drops and the round starts
+const LEADIN_MS = 3 * 1000; // short synced countdown before the letter drops
 
 /* ---------------- Seeded RNG (xmur3 + mulberry32) ---------------- */
 function xmur3(str) {
@@ -511,25 +560,19 @@ function newSeed() {
   return (Date.now().toString(36) + Math.random().toString(36).slice(2, 6)).slice(-7);
 }
 
-/* ---------------- Hash routing ---------------- */
+/* ---------------- Hash routing (room-based) ---------------- */
 function parseHash() {
-  const h = location.hash.replace(/^#/, "");
-  const p = new URLSearchParams(h);
-  const seed = (p.get("g") || "").trim().toLowerCase();
-  const t = parseInt(p.get("t") || "", 10);
-  return { seed, start: Number.isFinite(t) ? t : null };
+  const p = new URLSearchParams(location.hash.replace(/^#/, ""));
+  return {
+    room: (p.get("room") || "").trim().toLowerCase(),
+    legacy: (p.get("g") || "").trim().toLowerCase()
+  };
 }
-function writeHash(seed, start) {
-  const p = new URLSearchParams();
-  p.set("g", seed);
-  if (start) p.set("t", String(start));
-  history.replaceState(null, "", "#" + p.toString());
+function writeHashRoom(roomId) {
+  history.replaceState(null, "", "#room=" + roomId);
 }
-function gameLink(seed, start) {
-  const p = new URLSearchParams();
-  p.set("g", seed);
-  if (start) p.set("t", String(start));
-  return location.origin + location.pathname + "#" + p.toString();
+function roomLink(roomId) {
+  return location.origin + location.pathname + "#room=" + roomId;
 }
 
 /* ---------------- Persistence ---------------- */
@@ -539,7 +582,9 @@ const store = {
   score(seed) { try { return JSON.parse(localStorage.getItem("lr.score." + seed) || "{}"); } catch { return {}; } },
   saveScore(seed, obj) { try { localStorage.setItem("lr.score." + seed, JSON.stringify(obj)); } catch {} },
   theme() { try { return localStorage.getItem("lr.theme"); } catch { return null; } },
-  saveTheme(v) { try { localStorage.setItem("lr.theme", v); } catch {} }
+  saveTheme(v) { try { localStorage.setItem("lr.theme", v); } catch {} },
+  name() { try { return localStorage.getItem("lr.name"); } catch { return null; } },
+  saveName(v) { try { localStorage.setItem("lr.name", v); } catch {} }
 };
 
 /* ---------------- Elements ---------------- */
@@ -551,8 +596,19 @@ const sheetEl = $("sheet"), controlsEl = $("controls"), boardHint = $("boardHint
 const buzzerEl = $("buzzer"), roomCode = $("roomCode");
 const scoreNum = $("scoreNum");
 
-let state = { seed: null, start: null, cats: [], letter: "", ended: false };
+let state = { room: null, created: false, round: 0, seed: null, start: null, cats: [], letter: "", ended: false, revealed: false, phase: null };
 let ticker = null;
+
+/* ---------------- Networking state (Trystero P2P) ---------------- */
+let TS = null;            // Trystero module (lazy-loaded)
+let net = null;           // { room, sendHello, sendState, sendAns }
+let netReady = false;     // room joined successfully
+let netOffline = false;   // couldn't reach signalling — solo fallback
+let mySelfId = "self";
+let roster = {};          // peerId -> { name, created }
+let peerAnswers = {};     // peerId -> { name, answers, round }
+let myName = "";
+let myAnswersShared = false;
 
 /* ---------------- Toast ---------------- */
 let toastTimer = null;
@@ -666,28 +722,16 @@ function refreshPhaseUI(phase) {
 function renderControls() {
   controlsEl.innerHTML = "";
   const phase = state.phase || computePhase().phase;
-
-  const addCopy = (label) => {
-    const b = document.createElement("button");
-    b.className = "btn"; b.textContent = label;
-    b.addEventListener("click", () => copyLink(true));
-    controlsEl.appendChild(b);
-  };
-
-  if (phase === "lobby") {
-    const start = document.createElement("button");
-    start.className = "btn primary"; start.textContent = "Start round";
-    start.addEventListener("click", startRound);
-    controlsEl.appendChild(start);
-    boardHint.textContent = `Press start for a ${BUFFER_MS / 1000}-second window to share the link — then the letter is revealed to everyone at once and the 3:00 begins.`;
-  } else if (phase === "buffer") {
-    addCopy("Copy synced link");
-    boardHint.textContent = "Send this link now — everyone who opens it gets the same letter the instant the round begins.";
+  if (phase === "buffer") {
+    boardHint.textContent = "Get ready — the letter drops for everyone at once.";
   } else if (phase === "play") {
-    addCopy("Copy synced link");
-    boardHint.textContent = "Live — this link is synced for anyone who opens it.";
+    const b = document.createElement("button");
+    b.className = "btn"; b.textContent = "Copy room link";
+    b.addEventListener("click", () => copyShare());
+    controlsEl.appendChild(b);
+    boardHint.textContent = "Live — good luck!";
   } else {
-    boardHint.textContent = "Round over. Read your answers aloud and tally below, or start a fresh round.";
+    boardHint.textContent = "";
   }
 }
 
@@ -733,43 +777,65 @@ function startTicker() {
 }
 function stopTicker() { if (ticker) { clearInterval(ticker); ticker = null; } }
 
-/* ---------------- Round lifecycle ---------------- */
-function loadGame(seed, start) {
-  const round = buildRound(seed);
-  state = { seed, start, cats: round.cats, letter: round.letter, ended: false, revealed: false, phase: null };
+/* ---------------- Room + round lifecycle ---------------- */
+function enterRoom(roomId, created) {
+  roomId = (roomId || "").toLowerCase();
+  if (!roomId) return;
+  teardownNet();
+  stopTicker(); stopKlaxon();
+  roster = {}; peerAnswers = {}; myAnswersShared = false;
+  netReady = false; netOffline = false;
+  state = { room: roomId, created: !!created, round: 0, seed: null, start: null, cats: [], letter: "", ended: false, revealed: false, phase: "lobby" };
 
   homeEl.style.display = "none";
   gameEl.style.display = "block";
-
-  letterEl.textContent = "?";
-  roomCode.textContent = seed.toUpperCase();
-  renderSheet();
-  setInputsEnabled(false);
   document.body.classList.remove("review", "critical", "panic");
-  stopKlaxon();
+  document.body.classList.add("lobby");
   buzzerEl.classList.remove("show");
+  letterEl.textContent = "?";
+  roomCode.textContent = roomId.toUpperCase();
+  sheetEl.innerHTML = "";
+  writeHashRoom(roomId);
 
-  const p = computePhase();
-  if (p.phase === "over") {
-    state.ended = true;
-    showLetter(false);
-    enterReview();
-  } else {
-    startTicker();
-  }
-  updateScore();
+  ensureName();
+  onNetStatus();
+  joinRoomNet(roomId);
 }
 
-function startRound() {
-  state.start = Date.now() + BUFFER_MS;
+function applyRound(seed, startAt, round) {
+  const built = buildRound(seed);
+  state.seed = seed;
+  state.start = startAt;
+  state.round = (typeof round === "number") ? round : state.round + 1;
+  state.cats = built.cats;
+  state.letter = built.letter;
   state.ended = false;
   state.revealed = false;
   state.phase = null;
+  peerAnswers = {};
+  myAnswersShared = false;
+
+  document.body.classList.remove("lobby", "review", "critical", "panic");
+  buzzerEl.classList.remove("show");
   letterEl.textContent = "?";
-  writeHash(state.seed, state.start);
+  renderSheet();
+  setInputsEnabled(false);
+  stopKlaxon();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+
+  const p = computePhase();
+  if (p.phase === "over") { state.ended = true; showLetter(false); enterReview(); }
+  else startTicker();
+  updateScore();
+}
+
+function startRoundAsHost() {
+  const seed = newSeed();
+  const startAt = Date.now() + LEADIN_MS;
+  const round = state.round + 1;
   getCtx(); // unlock audio on this user gesture so the klaxon can play later
-  startTicker();
-  copyLink(true, `Link copied — round starts in ${BUFFER_MS / 1000}s. Send it now!`);
+  if (net && !netOffline) { try { net.sendState({ seed, startAt, round }); } catch {} }
+  applyRound(seed, startAt, round);
 }
 
 function endRound() {
@@ -781,18 +847,105 @@ function endRound() {
   document.body.classList.remove("critical", "panic");
   stopKlaxon();
   showLetter(false);
+  broadcastAnswers();
   enterReview();
   buzz();
 }
 
 function enterReview() {
+  document.body.classList.remove("lobby");
   document.body.classList.add("review");
   setInputsEnabled(false);
   buzzerEl.classList.add("show");
   phaseLbl.textContent = "done";
   state.phase = "over";
   renderControls();
+  renderReview();
+  renderReviewControls();
   updateScore();
+}
+
+/* ---------------- Multiplayer review ---------------- */
+function normalise(s) { return (s || "").trim().toLowerCase(); }
+
+function reviewPlayers() {
+  const mine = { name: myName + " (you)", answers: store.ans(state.seed), me: true };
+  const others = Object.keys(peerAnswers)
+    .map(id => peerAnswers[id])
+    .filter(p => p.round == null || p.round === state.round)
+    .map(p => ({ name: p.name || "Player", answers: p.answers || {}, me: false }));
+  return [mine, ...others];
+}
+
+function renderReview() {
+  const scores = store.score(state.seed);
+  const players = reviewPlayers();
+  sheetEl.innerHTML = "";
+  state.cats.forEach((cat, i) => {
+    const item = document.createElement("div");
+    item.className = "item" + (scores[i] ? " scored" : "");
+
+    const num = document.createElement("div");
+    num.className = "num"; num.textContent = (i + 1);
+
+    const col = document.createElement("div");
+    const catEl = document.createElement("div");
+    catEl.className = "cat"; catEl.textContent = cat;
+    col.appendChild(catEl);
+
+    const answers = document.createElement("div");
+    answers.className = "answers";
+    const counts = {};
+    players.forEach(pl => { const v = normalise(pl.answers[i]); if (v) counts[v] = (counts[v] || 0) + 1; });
+    players.forEach(pl => {
+      const raw = (pl.answers[i] || "").trim();
+      const v = normalise(pl.answers[i]);
+      const row = document.createElement("div");
+      row.className = "ansrow" + (!raw ? " blank" : (counts[v] > 1 ? " dupe" : ""));
+      const who = document.createElement("span");
+      who.className = "who"; who.textContent = pl.name;
+      const val = document.createElement("span");
+      val.className = "val2"; val.textContent = raw || "—";
+      row.appendChild(who); row.appendChild(val);
+      answers.appendChild(row);
+    });
+    col.appendChild(answers);
+
+    const sbtn = document.createElement("button");
+    sbtn.className = "scorebtn" + (scores[i] ? " on" : "");
+    sbtn.innerHTML = '<span class="dot"></span> I scored this';
+    sbtn.addEventListener("click", () => {
+      const sc = store.score(state.seed);
+      sc[i] = !sc[i]; store.saveScore(state.seed, sc);
+      sbtn.classList.toggle("on", !!sc[i]);
+      item.classList.toggle("scored", !!sc[i]);
+      updateScore();
+    });
+    col.appendChild(sbtn);
+
+    item.appendChild(num); item.appendChild(col);
+    sheetEl.appendChild(item);
+  });
+}
+
+function renderReviewControls() {
+  const el = $("reviewControls");
+  if (!el) return;
+  el.innerHTML = "";
+  if (isHost()) {
+    const nr = document.createElement("button");
+    nr.className = "btn primary"; nr.textContent = "New round";
+    nr.addEventListener("click", startRoundAsHost);
+    el.appendChild(nr);
+  } else {
+    const w = document.createElement("span");
+    w.className = "waiting"; w.textContent = "Waiting for the host to start a new round…";
+    el.appendChild(w);
+  }
+  const copy = document.createElement("button");
+  copy.className = "btn ghost"; copy.textContent = "Copy room link";
+  copy.addEventListener("click", () => copyShare());
+  el.appendChild(copy);
 }
 
 /* ---------------- WebAudio (no assets) ---------------- */
@@ -866,9 +1019,12 @@ function buzz() {
 }
 
 /* ---------------- Sharing ---------------- */
-function copyLink(withStart, msg) {
-  const link = gameLink(state.seed, withStart ? state.start : null);
-  const done = () => toast(msg || "Link copied");
+function shareLink() {
+  return state.room ? roomLink(state.room) : location.href;
+}
+function copyShare(msg) {
+  const link = shareLink();
+  const done = () => toast(msg || "Room link copied");
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(link).then(done).catch(() => fallbackCopy(link, done));
   } else fallbackCopy(link, done);
@@ -881,58 +1037,221 @@ function fallbackCopy(text, cb) {
   document.body.removeChild(ta);
 }
 
+/* ---------------- Trystero networking ---------------- */
+const TS_CANDIDATES = [
+  "https://esm.sh/trystero/nostr",
+  "https://esm.sh/trystero/mqtt",
+  "https://esm.sh/trystero"
+];
+async function loadTrystero() {
+  if (TS) return TS;
+  for (const url of TS_CANDIDATES) {
+    try {
+      const mod = await import(url);
+      if (mod && typeof mod.joinRoom === "function") { TS = mod; return TS; }
+    } catch (e) { /* try next strategy/CDN */ }
+  }
+  return null;
+}
+
+function teardownNet() {
+  try { if (net && net.room && net.room.leave) net.room.leave(); } catch {}
+  net = null; netReady = false;
+}
+
+async function joinRoomNet(roomId) {
+  const mod = await loadTrystero();
+  if (state.room !== roomId) return;              // navigated away while importing
+  if (!mod) { netOffline = true; onNetStatus(); return; }
+  mySelfId = mod.selfId || "self";
+  let room;
+  try {
+    room = mod.joinRoom({ appId: "the-letter-round-v1", password: roomId }, roomId);
+  } catch (e) { netOffline = true; onNetStatus(); return; }
+
+  const [sendHello, getHello] = room.makeAction("hello");
+  const [sendState, getState] = room.makeAction("state");
+  const [sendAns, getAns] = room.makeAction("ans");
+  net = { room, sendHello, sendState, sendAns };
+  netOffline = false; netReady = true;
+
+  getHello((data, peerId) => {
+    roster[peerId] = { name: (data && data.name) || "Player", created: !!(data && data.created) };
+    onNetStatus();
+    if (isHost() && state.start) { try { net.sendState(roundPayload(), peerId); } catch {} }
+    if (myAnswersShared && document.body.classList.contains("review")) { try { net.sendAns(answerPayload(), peerId); } catch {} }
+  });
+  getState((data) => {
+    if (!data || typeof data.startAt !== "number") return;
+    if (state.seed && typeof data.round === "number" && data.round <= state.round) return; // ignore stale/duplicate
+    applyRound(data.seed, data.startAt, data.round);
+  });
+  getAns((data, peerId) => {
+    if (!data) return;
+    const fallbackName = (roster[peerId] && roster[peerId].name) || "Player";
+    peerAnswers[peerId] = { name: data.name || fallbackName, answers: data.answers || {}, round: data.round };
+    if (document.body.classList.contains("review")) renderReview();
+  });
+
+  room.onPeerJoin(peerId => { try { net.sendHello(helloPayload(), peerId); } catch {} onNetStatus(); });
+  room.onPeerLeave(peerId => {
+    delete roster[peerId]; delete peerAnswers[peerId];
+    onNetStatus();
+    if (document.body.classList.contains("review")) renderReview();
+  });
+
+  try { net.sendHello(helloPayload()); } catch {}
+  onNetStatus();
+}
+
+function helloPayload() { return { name: myName, created: !!state.created }; }
+function roundPayload() { return { seed: state.seed, startAt: state.start, round: state.round }; }
+function answerPayload() { return { name: myName, answers: store.ans(state.seed), round: state.round }; }
+function broadcastAnswers() {
+  if (net && !netOffline) { try { net.sendAns(answerPayload()); myAnswersShared = true; } catch {} }
+}
+
+function hostId() {
+  const all = [{ id: mySelfId || "self", created: !!state.created }]
+    .concat(Object.keys(roster).map(id => ({ id, created: !!roster[id].created })));
+  const creators = all.filter(p => p.created).map(p => p.id).sort();
+  if (creators.length) return creators[0];
+  return all.map(p => p.id).sort()[0];
+}
+function isHost() {
+  if (netOffline) return true;           // solo / offline: you host yourself
+  if (!netReady) return !!state.created; // while connecting, the creator hosts
+  return hostId() === (mySelfId || "self");
+}
+
+/* ---------------- Presence / roster / name ---------------- */
+const NAME_ADJ = ["Zippy", "Brisk", "Lucky", "Mellow", "Nimble", "Snappy", "Jolly", "Swift", "Chirpy", "Breezy"];
+const NAME_NOUN = ["Otter", "Badger", "Falcon", "Panda", "Heron", "Fox", "Lynx", "Wren", "Moose", "Robin"];
+function defaultName() {
+  return NAME_ADJ[Math.floor(Math.random() * NAME_ADJ.length)] + " " +
+         NAME_NOUN[Math.floor(Math.random() * NAME_NOUN.length)];
+}
+function ensureName() {
+  myName = (store.name() || "").trim() || defaultName();
+  store.saveName(myName);
+  const inp = $("nameInput");
+  if (inp) inp.value = myName;
+}
+function renderRoster() {
+  const el = $("roster");
+  if (!el) return;
+  const host = hostId();
+  const list = [{ id: mySelfId || "self", name: myName, me: true }]
+    .concat(Object.keys(roster).map(id => ({ id, name: roster[id].name, me: false })));
+  list.sort((a, b) => (a.id < b.id ? -1 : 1));
+  el.innerHTML = "";
+  list.forEach(p => {
+    const row = document.createElement("div");
+    row.className = "player";
+    const name = document.createElement("span");
+    name.textContent = p.name;
+    row.appendChild(name);
+    if (!netOffline && netReady && p.id === host) {
+      const b = document.createElement("span");
+      b.className = "badge"; b.textContent = "host";
+      row.appendChild(b);
+    }
+    if (p.me) {
+      const m = document.createElement("span");
+      m.className = "me"; m.textContent = "you";
+      row.appendChild(m);
+    }
+    el.appendChild(row);
+  });
+}
+function renderLobbyControls() {
+  const el = $("lobbyControls");
+  if (!el) return;
+  el.innerHTML = "";
+  const copy = document.createElement("button");
+  copy.className = "btn"; copy.textContent = "Copy room link";
+  copy.addEventListener("click", () => copyShare("Room link copied — send it to your friends"));
+  const hint = $("lobbyHint");
+  if (isHost()) {
+    const start = document.createElement("button");
+    start.className = "btn primary"; start.textContent = "Start round";
+    start.addEventListener("click", startRoundAsHost);
+    el.appendChild(start);
+    el.appendChild(copy);
+    if (hint) hint.textContent = netOffline
+      ? "Offline — others can't join, but you can still play solo."
+      : "You're the host. Share the link, then start when everyone's in.";
+  } else {
+    el.appendChild(copy);
+    if (hint) hint.textContent = "Waiting for the host to start the round…";
+  }
+}
+function onNetStatus() {
+  const countEl = $("playerCount");
+  if (countEl) {
+    countEl.textContent = netOffline ? "· offline"
+      : (!netReady ? "· connecting…" : "· " + (Object.keys(roster).length + 1) + " here");
+  }
+  const pill = $("codepill");
+  if (pill) {
+    pill.classList.toggle("online", !netOffline && netReady);
+    pill.classList.toggle("offline", netOffline);
+  }
+  const note = $("offlineNote");
+  if (note) note.hidden = !netOffline;
+  renderRoster();
+  renderLobbyControls();
+}
+
 /* ---------------- Wiring ---------------- */
-$("newGame").addEventListener("click", () => {
-  const seed = newSeed();
-  writeHash(seed, null);
-  loadGame(seed, null);
-});
+$("newGame").addEventListener("click", () => { enterRoom(newSeed(), true); });
+
 function doJoin() {
   const raw = $("joinInput").value.trim();
-  if (!raw) { toast("Paste a link or room code first"); return; }
-  let seed = "";
-  const m = raw.match(/[#&?]g=([a-z0-9]+)/i);
-  if (m) seed = m[1];
-  else seed = raw.replace(/[^a-z0-9]/gi, "");
-  seed = seed.toLowerCase();
-  if (!seed) { toast("That doesn't look like a game code"); return; }
-  let start = null;
-  const mt = raw.match(/[#&?]t=(\d+)/);
-  if (mt) start = parseInt(mt[1], 10);
-  writeHash(seed, start);
-  loadGame(seed, start);
+  if (!raw) { toast("Paste a room link or code first"); return; }
+  const m = raw.match(/[#&?]room=([a-z0-9]+)/i);
+  let id = m ? m[1] : "";
+  if (!id) {
+    if (/[#&?]g=/i.test(raw)) { toast("That's an old-style link — start a new game instead"); return; }
+    id = raw.replace(/[^a-z0-9]/gi, "");
+  }
+  id = id.toLowerCase();
+  if (!id) { toast("That doesn't look like a room code"); return; }
+  enterRoom(id, false);
 }
 $("joinBtn").addEventListener("click", doJoin);
 $("joinInput").addEventListener("keydown", e => { if (e.key === "Enter") doJoin(); });
 
-$("brandHome").addEventListener("click", () => { stopTicker(); location.hash = ""; showHome(); });
-$("againBtn").addEventListener("click", () => {
-  const seed = newSeed();
-  writeHash(seed, null);
-  loadGame(seed, null);
-  window.scrollTo({ top: 0, behavior: "smooth" });
-});
-$("replayBtn").addEventListener("click", () => {
-  store.saveScore(state.seed, {});
-  state.start = null; state.ended = false;
-  writeHash(state.seed, null);
-  loadGame(state.seed, null);
-  window.scrollTo({ top: 0, behavior: "smooth" });
+$("nameInput").addEventListener("input", () => {
+  myName = ($("nameInput").value || "").trim().slice(0, 20) || defaultName();
+  store.saveName(myName);
+  renderRoster();
+  if (net && !netOffline) { try { net.sendHello(helloPayload()); } catch {} }
 });
 
+$("brandHome").addEventListener("click", () => { location.hash = ""; showHome(); });
+
 function showHome() {
-  stopTicker();
+  teardownNet();
+  stopTicker(); stopKlaxon();
   gameEl.style.display = "none";
   homeEl.style.display = "block";
-  document.body.classList.remove("review", "critical", "panic");
-  stopKlaxon();
+  document.body.classList.remove("review", "critical", "panic", "lobby");
+  state = { room: null, created: false, round: 0, seed: null, start: null, cats: [], letter: "", ended: false, revealed: false, phase: null };
 }
 
 /* ---------------- Boot ---------------- */
 function route() {
-  const { seed, start } = parseHash();
-  if (seed) loadGame(seed, start);
-  else showHome();
+  const { room, legacy } = parseHash();
+  if (room) {
+    if (state.room === room && (netReady || netOffline)) return; // already here
+    enterRoom(room, false);
+  } else if (legacy) {
+    toast("That's an old-style link — start a new game");
+    showHome();
+  } else {
+    showHome();
+  }
 }
 window.addEventListener("hashchange", route);
 
