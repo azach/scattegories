@@ -299,13 +299,25 @@
   .scorebtn.on .dot { background: var(--good); border-color: var(--good); }
 
   .totalbar {
-    display: none; align-items: center; justify-content: space-between; gap: 12px;
-    margin-top: 16px; padding: 14px 18px; background: var(--board);
+    display: none; flex-direction: column; align-items: stretch; gap: 14px;
+    margin-top: 16px; padding: 16px 18px; background: var(--board);
     border: 1px solid var(--line); border-radius: 14px;
   }
   body.review .totalbar { display: flex; }
-  .totalbar .score { font-family: 'Big Shoulders Display', sans-serif; font-weight: 800; font-size: 34px; }
-  .totalbar .score b { color: var(--accent); }
+  .totalbar .controls { align-items: center; }
+  .scorewrap { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .scoreboard { display: flex; flex-direction: column; gap: 6px; }
+  .scoreline {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 8px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  }
+  .scoreline.me { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+  .scoreline .nm { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .scoreline .tot { font-family: 'Big Shoulders Display', sans-serif; font-weight: 800; font-size: 26px; display: flex; align-items: baseline; gap: 8px; flex: none; }
+  .scoreline .tot b { color: var(--accent); }
+  .scoreline .delta { font-family: 'Hanken Grotesk', sans-serif; font-weight: 500; font-size: 11px; color: var(--muted); }
+  .roundtally { font-size: 12.5px; color: var(--muted); }
+  .roundtally b { color: var(--ink); }
 
   .footer { margin-top: 28px; color: var(--faint); font-size: 12px; display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .themebtn { border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 8px; padding: 4px 10px; font-size: 12px; }
@@ -331,6 +343,13 @@
   .namerow { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 18px; }
   .namerow label { font-size: 13px; color: var(--muted); }
   .namerow input { flex: 1 1 160px; }
+  .segmented { display: inline-flex; gap: 4px; background: var(--surface); border: 1px solid var(--line); border-radius: 11px; padding: 4px; }
+  .segmented button { border: none; background: transparent; color: var(--muted); font-weight: 600; font-size: 13px; padding: 7px 13px; border-radius: 8px; transition: background .12s ease, color .12s ease; }
+  .segmented button:hover { color: var(--ink); }
+  .segmented button.on { background: var(--accent); color: var(--accent-ink); }
+  .segmented button:disabled { cursor: default; }
+  .segmented button:disabled:not(.on) { opacity: .45; }
+  .segmented button:disabled:hover { color: var(--muted); }
   .roster { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 18px; }
   .player {
     display: flex; align-items: center; gap: 10px; padding: 10px 12px;
@@ -343,6 +362,21 @@
   .player .me { margin-left: auto; color: var(--faint); font-weight: 500; font-size: 12px; }
   .waiting { color: var(--muted); font-size: 14px; }
   .offline-note { color: var(--hot); font-size: 13px; margin-top: 10px; }
+
+  /* summary screen */
+  .summary { display: none; }
+  body.summary .summary { display: block; }
+  body.summary .board, body.summary .sheet, body.summary .totalbar, body.summary .buzzer, body.summary .lobby { display: none !important; }
+  .winner {
+    font-family: 'Big Shoulders Display', sans-serif; font-weight: 800;
+    font-size: clamp(30px, 7vw, 48px); line-height: 1.05; color: var(--accent); margin-top: 6px; text-wrap: balance;
+  }
+  .sumrounds { display: flex; flex-direction: column; gap: 6px; }
+  .roundline {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 8px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; font-size: 14px;
+  }
+  .roundline .rw { font-weight: 600; }
 
   /* multiplayer review grid (rendered into .item) */
   .answers { display: flex; flex-direction: column; gap: 5px; margin-top: 2px; }
@@ -422,6 +456,15 @@
           <label for="nameInput">Your name</label>
           <input class="code" id="nameInput" maxlength="20" autocomplete="off" spellcheck="false">
         </div>
+        <div class="namerow" id="durationRow" hidden>
+          <label>Round length</label>
+          <div class="segmented" id="durationSeg" role="group" aria-label="Round length">
+            <button type="button" data-ms="60000">1 min</button>
+            <button type="button" data-ms="120000">2 min</button>
+            <button type="button" data-ms="180000">3 min</button>
+            <button type="button" data-ms="300000">5 min</button>
+          </div>
+        </div>
         <div class="roster" id="roster"></div>
         <div class="controls" id="lobbyControls"></div>
         <div class="hint" id="lobbyHint" style="margin-top:10px;"></div>
@@ -457,11 +500,24 @@
     <div class="sheet" id="sheet"></div>
 
     <div class="totalbar">
-      <div>
-        <div class="eyebrow">your round</div>
-        <div class="score"><b id="scoreNum">0</b> / 12 points</div>
+      <div class="scorewrap">
+        <div class="eyebrow">Session scores</div>
+        <div class="scoreboard" id="scoreboard"></div>
+        <div class="roundtally">This round: <b id="scoreNum">0</b> / 12</div>
       </div>
       <div class="controls" id="reviewControls"></div>
+    </div>
+
+    <div class="summary" id="summary">
+      <div class="panel">
+        <div class="eyebrow">Game over</div>
+        <div class="winner" id="summaryWinner"></div>
+        <div class="eyebrow" style="margin-top:16px;">Final scores</div>
+        <div class="scoreboard" id="summaryScores"></div>
+        <div class="eyebrow" style="margin-top:16px;">Round by round</div>
+        <div class="sumrounds" id="summaryRounds"></div>
+        <div class="controls" id="summaryControls" style="margin-top:18px;"></div>
+      </div>
     </div>
 
     <div class="footer">
@@ -584,7 +640,9 @@ const store = {
   theme() { try { return localStorage.getItem("lr.theme"); } catch { return null; } },
   saveTheme(v) { try { localStorage.setItem("lr.theme", v); } catch {} },
   name() { try { return localStorage.getItem("lr.name"); } catch { return null; } },
-  saveName(v) { try { localStorage.setItem("lr.name", v); } catch {} }
+  saveName(v) { try { localStorage.setItem("lr.name", v); } catch {} },
+  dur() { try { return parseInt(localStorage.getItem("lr.dur") || "", 10) || null; } catch { return null; } },
+  saveDur(v) { try { localStorage.setItem("lr.dur", String(v)); } catch {} }
 };
 
 /* ---------------- Elements ---------------- */
@@ -596,8 +654,10 @@ const sheetEl = $("sheet"), controlsEl = $("controls"), boardHint = $("boardHint
 const buzzerEl = $("buzzer"), roomCode = $("roomCode");
 const scoreNum = $("scoreNum");
 
-let state = { room: null, created: false, round: 0, seed: null, start: null, cats: [], letter: "", ended: false, revealed: false, phase: null };
+let state = { room: null, created: false, round: 0, seed: null, start: null, durationMs: DURATION_MS, cats: [], letter: "", ended: false, revealed: false, phase: null };
 let ticker = null;
+let chosenDurationMs = DURATION_MS; // host's lobby selection for the next round
+let sessionScores = {};            // peerId -> { name, rounds: { roundNum: score } } — cumulative across the room session
 
 /* ---------------- Networking state (Trystero P2P) ---------------- */
 let TS = null;            // Trystero module (lazy-loaded)
@@ -681,9 +741,57 @@ function renderSheet() {
   });
 }
 
+function selfKey() { return mySelfId || "self"; }
+
+function recordScore(id, name, round, score) {
+  if (round == null) return;
+  const entry = sessionScores[id] || { name: name || "Player", rounds: {} };
+  if (name) entry.name = name;
+  entry.rounds[round] = score;
+  sessionScores[id] = entry;
+}
+
+function cumulativeOf(id) {
+  const entry = sessionScores[id];
+  if (!entry) return 0;
+  return Object.values(entry.rounds).reduce((a, b) => a + (b || 0), 0);
+}
+
 function updateScore() {
   const sc = store.score(state.seed);
-  scoreNum.textContent = Object.values(sc).filter(Boolean).length;
+  const myRound = Object.values(sc).filter(Boolean).length;
+  if (scoreNum) scoreNum.textContent = myRound;
+  recordScore(selfKey(), myName, state.round, myRound);
+  if (document.body.classList.contains("review")) {
+    if (net && !netOffline) { try { net.sendScore({ round: state.round, score: myRound, name: myName }); } catch {} }
+    renderScoreboard();
+  }
+}
+
+function renderScoreboard() {
+  const el = $("scoreboard");
+  if (!el) return;
+  const me = selfKey();
+  const rows = Object.keys(sessionScores).map(id => ({
+    id,
+    name: sessionScores[id].name,
+    total: cumulativeOf(id),
+    thisRound: sessionScores[id].rounds[state.round] || 0,
+    me: id === me
+  }));
+  rows.sort((a, b) => b.total - a.total || (a.name < b.name ? -1 : 1));
+  el.innerHTML = "";
+  rows.forEach(r => {
+    const line = document.createElement("div");
+    line.className = "scoreline" + (r.me ? " me" : "");
+    const nm = document.createElement("span");
+    nm.className = "nm"; nm.textContent = r.name + (r.me ? " (you)" : "");
+    const tot = document.createElement("span");
+    tot.className = "tot";
+    tot.innerHTML = "<b>" + r.total + "</b><span class='delta'>+" + r.thisRound + " this round</span>";
+    line.appendChild(nm); line.appendChild(tot);
+    el.appendChild(line);
+  });
 }
 
 function setInputsEnabled(on) {
@@ -691,11 +799,12 @@ function setInputsEnabled(on) {
 }
 
 function computePhase() {
-  if (!state.start) return { phase: "lobby", remaining: DURATION_MS };
+  const dur = state.durationMs || DURATION_MS;
+  if (!state.start) return { phase: "lobby", remaining: dur };
   const now = Date.now();
   if (now < state.start) return { phase: "buffer", remaining: state.start - now };
   const played = now - state.start;
-  if (played < DURATION_MS) return { phase: "play", remaining: DURATION_MS - played };
+  if (played < dur) return { phase: "play", remaining: dur - played };
   return { phase: "over", remaining: 0 };
 }
 
@@ -740,7 +849,7 @@ function tick() {
   if (p.phase !== state.phase) refreshPhaseUI(p.phase);
 
   if (p.phase === "lobby") {
-    clockEl.textContent = fmt(DURATION_MS);
+    clockEl.textContent = fmt(state.durationMs || chosenDurationMs || DURATION_MS);
     clockEl.classList.remove("warn");
     readoutEl.classList.remove("critical");
     document.body.classList.remove("critical", "panic");
@@ -760,10 +869,10 @@ function tick() {
   if (p.phase === "play") {
     clockEl.textContent = fmt(p.remaining);
     clockEl.classList.toggle("warn", p.remaining <= 60000);
-    readoutEl.classList.toggle("critical", p.remaining <= 30000);
-    document.body.classList.toggle("critical", p.remaining <= 30000);
-    document.body.classList.toggle("panic", p.remaining <= 10000);
-    if (p.remaining <= 10000) startKlaxon(); else stopKlaxon();
+    readoutEl.classList.toggle("critical", p.remaining <= 20000);
+    document.body.classList.toggle("critical", p.remaining <= 20000);
+    document.body.classList.toggle("panic", p.remaining <= 5000);
+    if (p.remaining <= 5000) startKlaxon(); else stopKlaxon();
     phaseLbl.textContent = "playing";
     return;
   }
@@ -784,8 +893,9 @@ function enterRoom(roomId, created) {
   teardownNet();
   stopTicker(); stopKlaxon();
   roster = {}; peerAnswers = {}; myAnswersShared = false;
+  sessionScores = {};
   netReady = false; netOffline = false;
-  state = { room: roomId, created: !!created, round: 0, seed: null, start: null, cats: [], letter: "", ended: false, revealed: false, phase: "lobby" };
+  state = { room: roomId, created: !!created, round: 0, seed: null, start: null, durationMs: chosenDurationMs, cats: [], letter: "", ended: false, revealed: false, phase: "lobby" };
 
   homeEl.style.display = "none";
   gameEl.style.display = "block";
@@ -802,11 +912,12 @@ function enterRoom(roomId, created) {
   joinRoomNet(roomId);
 }
 
-function applyRound(seed, startAt, round) {
+function applyRound(seed, startAt, round, durationMs) {
   const built = buildRound(seed);
   state.seed = seed;
   state.start = startAt;
   state.round = (typeof round === "number") ? round : state.round + 1;
+  state.durationMs = durationMs || DURATION_MS;
   state.cats = built.cats;
   state.letter = built.letter;
   state.ended = false;
@@ -833,9 +944,10 @@ function startRoundAsHost() {
   const seed = newSeed();
   const startAt = Date.now() + LEADIN_MS;
   const round = state.round + 1;
+  const durationMs = chosenDurationMs || DURATION_MS;
   getCtx(); // unlock audio on this user gesture so the klaxon can play later
-  if (net && !netOffline) { try { net.sendState({ seed, startAt, round }); } catch {} }
-  applyRound(seed, startAt, round);
+  if (net && !netOffline) { try { net.sendState({ seed, startAt, round, durationMs }); } catch {} }
+  applyRound(seed, startAt, round, durationMs);
 }
 
 function endRound() {
@@ -937,6 +1049,10 @@ function renderReviewControls() {
     nr.className = "btn primary"; nr.textContent = "New round";
     nr.addEventListener("click", startRoundAsHost);
     el.appendChild(nr);
+    const fin = document.createElement("button");
+    fin.className = "btn"; fin.textContent = "Finish game";
+    fin.addEventListener("click", hostFinish);
+    el.appendChild(fin);
   } else {
     const w = document.createElement("span");
     w.className = "waiting"; w.textContent = "Waiting for the host to start a new round…";
@@ -946,6 +1062,118 @@ function renderReviewControls() {
   copy.className = "btn ghost"; copy.textContent = "Copy room link";
   copy.addEventListener("click", () => copyShare());
   el.appendChild(copy);
+}
+
+/* ---------------- End-of-game summary ---------------- */
+function buildSummary() {
+  const roundSet = new Set();
+  const players = Object.keys(sessionScores).map(id => {
+    const e = sessionScores[id];
+    Object.keys(e.rounds).forEach(r => roundSet.add(parseInt(r, 10)));
+    return { name: e.name, rounds: e.rounds, total: cumulativeOf(id) };
+  });
+  return { players, rounds: [...roundSet].sort((a, b) => a - b) };
+}
+
+function hostFinish() {
+  const summary = buildSummary();
+  if (net && !netOffline) { try { net.sendFinish(summary); } catch {} }
+  showSummary(summary);
+}
+
+function showSummary(sum) {
+  stopTicker(); stopKlaxon();
+  buzzerEl.classList.remove("show");
+  document.body.classList.remove("inlobby", "review", "critical", "panic");
+  document.body.classList.add("summary");
+  renderSummary(sum || { players: [], rounds: [] });
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function renderSummary(sum) {
+  const players = (sum && sum.players) || [];
+  const rounds = (sum && sum.rounds) || [];
+
+  const maxTotal = players.reduce((m, p) => Math.max(m, p.total), 0);
+  const winners = players.filter(p => p.total === maxTotal && maxTotal > 0).map(p => p.name);
+  const winEl = $("summaryWinner");
+  if (winEl) {
+    if (winners.length === 0) winEl.textContent = "No scores recorded";
+    else if (winners.length === 1) winEl.textContent = "🏆 " + winners[0] + " wins!";
+    else winEl.textContent = "🏆 Tie: " + winners.join(" & ");
+  }
+
+  const se = $("summaryScores");
+  if (se) {
+    se.innerHTML = "";
+    players.slice().sort((a, b) => b.total - a.total || (a.name < b.name ? -1 : 1)).forEach(p => {
+      const line = document.createElement("div");
+      line.className = "scoreline" + (winners.includes(p.name) && maxTotal > 0 ? " me" : "");
+      const nm = document.createElement("span");
+      nm.className = "nm"; nm.textContent = p.name;
+      const tot = document.createElement("span");
+      tot.className = "tot"; tot.innerHTML = "<b>" + p.total + "</b>";
+      line.appendChild(nm); line.appendChild(tot);
+      se.appendChild(line);
+    });
+  }
+
+  const re = $("summaryRounds");
+  if (re) {
+    re.innerHTML = "";
+    rounds.forEach((r, idx) => {
+      let best = 0, w = [];
+      players.forEach(p => {
+        const s = (p.rounds && p.rounds[r]) || 0;
+        if (s > best) { best = s; w = [p.name]; }
+        else if (s === best && s > 0) { w.push(p.name); }
+      });
+      const line = document.createElement("div");
+      line.className = "roundline";
+      const lbl = document.createElement("span");
+      lbl.textContent = "Round " + (idx + 1);
+      const rw = document.createElement("span");
+      rw.className = "rw";
+      rw.textContent = best > 0 ? (w.join(" & ") + " · " + best) : "no winner";
+      line.appendChild(lbl); line.appendChild(rw);
+      re.appendChild(line);
+    });
+  }
+
+  renderSummaryControls();
+}
+
+function renderSummaryControls() {
+  const el = $("summaryControls");
+  if (!el) return;
+  el.innerHTML = "";
+  if (isHost()) {
+    const again = document.createElement("button");
+    again.className = "btn primary"; again.textContent = "New game (reset scores)";
+    again.addEventListener("click", hostRematch);
+    el.appendChild(again);
+  }
+  const home = document.createElement("button");
+  home.className = "btn ghost"; home.textContent = "Back to home";
+  home.addEventListener("click", () => { location.hash = ""; showHome(); });
+  el.appendChild(home);
+}
+
+function resetToLobby() {
+  sessionScores = {}; peerAnswers = {}; myAnswersShared = false;
+  state.round = 0; state.seed = null; state.start = null;
+  stopTicker(); stopKlaxon();
+  buzzerEl.classList.remove("show");
+  letterEl.textContent = "?";
+  sheetEl.innerHTML = "";
+  document.body.classList.remove("summary", "review", "critical", "panic");
+  document.body.classList.add("inlobby");
+  onNetStatus();
+}
+
+function hostRematch() {
+  if (net && !netOffline) { try { net.sendReset(); } catch {} }
+  resetToLobby();
 }
 
 /* ---------------- WebAudio (no assets) ---------------- */
@@ -1073,14 +1301,21 @@ async function joinRoomNet(roomId) {
   const helloAct = room.makeAction("hello");
   const stateAct = room.makeAction("state");
   const ansAct = room.makeAction("ans");
+  const scoreAct = room.makeAction("score");
+  const finishAct = room.makeAction("finish");
+  const resetAct = room.makeAction("reset");
   const mkSend = (act) => (payload, target) => act.send(payload, target ? { target } : undefined);
-  net = { room, sendHello: mkSend(helloAct), sendState: mkSend(stateAct), sendAns: mkSend(ansAct) };
+  net = {
+    room,
+    sendHello: mkSend(helloAct), sendState: mkSend(stateAct), sendAns: mkSend(ansAct),
+    sendScore: mkSend(scoreAct), sendFinish: mkSend(finishAct), sendReset: mkSend(resetAct)
+  };
   netOffline = false; netReady = true;
 
   helloAct.onMessage = (data, meta) => {
     const peerId = meta && meta.peerId;
     if (!peerId) return;
-    roster[peerId] = { name: (data && data.name) || "Player", created: !!(data && data.created) };
+    roster[peerId] = { name: (data && data.name) || "Player", created: !!(data && data.created), dur: (data && data.dur) || null };
     onNetStatus();
     if (isHost() && state.start) { try { net.sendState(roundPayload(), peerId); } catch {} }
     if (myAnswersShared && document.body.classList.contains("review")) { try { net.sendAns(answerPayload(), peerId); } catch {} }
@@ -1088,15 +1323,26 @@ async function joinRoomNet(roomId) {
   stateAct.onMessage = (data) => {
     if (!data || typeof data.startAt !== "number") return;
     if (state.seed && typeof data.round === "number" && data.round <= state.round) return; // ignore stale/duplicate
-    applyRound(data.seed, data.startAt, data.round);
+    applyRound(data.seed, data.startAt, data.round, data.durationMs);
   };
   ansAct.onMessage = (data, meta) => {
     const peerId = meta && meta.peerId;
     if (!data || !peerId) return;
     const fallbackName = (roster[peerId] && roster[peerId].name) || "Player";
     peerAnswers[peerId] = { name: data.name || fallbackName, answers: data.answers || {}, round: data.round };
-    if (document.body.classList.contains("review")) renderReview();
+    if (sessionScores[peerId] == null || sessionScores[peerId].rounds[data.round] == null) {
+      recordScore(peerId, data.name || fallbackName, data.round, 0); // show them on the board at 0 until they tick
+    }
+    if (document.body.classList.contains("review")) { renderReview(); renderScoreboard(); }
   };
+  scoreAct.onMessage = (data, meta) => {
+    const peerId = meta && meta.peerId;
+    if (!data || !peerId) return;
+    recordScore(peerId, data.name, data.round, data.score || 0);
+    if (document.body.classList.contains("review")) renderScoreboard();
+  };
+  finishAct.onMessage = (data) => { showSummary(data || { players: [], rounds: [] }); };
+  resetAct.onMessage = () => { resetToLobby(); };
 
   room.onPeerJoin = (peerId) => { try { net.sendHello(helloPayload(), peerId); } catch {} onNetStatus(); };
   room.onPeerLeave = (peerId) => {
@@ -1109,7 +1355,7 @@ async function joinRoomNet(roomId) {
   onNetStatus();
 }
 
-function helloPayload() { return { name: myName, created: !!state.created }; }
+function helloPayload() { return { name: myName, created: !!state.created, dur: chosenDurationMs }; }
 function roundPayload() { return { seed: state.seed, startAt: state.start, round: state.round }; }
 function answerPayload() { return { name: myName, answers: store.ans(state.seed), round: state.round }; }
 function broadcastAnswers() {
@@ -1130,8 +1376,8 @@ function isHost() {
 }
 
 /* ---------------- Presence / roster / name ---------------- */
-const NAME_ADJ = ["Zippy", "Brisk", "Lucky", "Mellow", "Nimble", "Snappy", "Jolly", "Swift", "Chirpy", "Breezy"];
-const NAME_NOUN = ["Otter", "Badger", "Falcon", "Panda", "Heron", "Fox", "Lynx", "Wren", "Moose", "Robin"];
+const NAME_ADJ = ["King", "Queen", "Prince", "Princess", "Duke", "Duchess", "Earl", "Baron", "Count", "Lord", "Lady", "Sir"];
+const NAME_NOUN = ["Donut", "Croissant", "Danish", "Eclair", "Muffin", "Scone", "Brioche", "Bagel", "Strudel", "Macaron", "Crumpet", "Baguette"];
 function defaultName() {
   return NAME_ADJ[Math.floor(Math.random() * NAME_ADJ.length)] + " " +
          NAME_NOUN[Math.floor(Math.random() * NAME_NOUN.length)];
@@ -1172,6 +1418,9 @@ function renderRoster() {
 function renderLobbyControls() {
   const el = $("lobbyControls");
   if (!el) return;
+  const durRow = $("durationRow");
+  if (durRow) durRow.hidden = false;
+  syncDurationSeg();
   el.innerHTML = "";
   const copy = document.createElement("button");
   copy.className = "btn"; copy.textContent = "Copy room link";
@@ -1234,6 +1483,37 @@ $("nameInput").addEventListener("input", () => {
   if (net && !netOffline) { try { net.sendHello(helloPayload()); } catch {} }
 });
 
+function effectiveLobbyDur() {
+  if (isHost()) return chosenDurationMs;
+  const hid = hostId();
+  if (hid && roster[hid] && roster[hid].dur) return roster[hid].dur;
+  for (const id in roster) if (roster[id].created && roster[id].dur) return roster[id].dur;
+  return DURATION_MS;
+}
+function syncDurationSeg() {
+  const seg = $("durationSeg");
+  if (!seg) return;
+  const host = isHost();
+  const target = effectiveLobbyDur();
+  seg.querySelectorAll("button").forEach(b => {
+    b.classList.toggle("on", parseInt(b.dataset.ms, 10) === target);
+    b.disabled = !host;
+  });
+}
+$("durationSeg").addEventListener("click", (e) => {
+  if (!isHost()) return;
+  const btn = e.target.closest("button[data-ms]");
+  if (!btn) return;
+  const v = parseInt(btn.dataset.ms, 10);
+  if (v > 0) {
+    chosenDurationMs = v;
+    store.saveDur(v);
+    if (state.phase === "lobby") state.durationMs = v;
+    syncDurationSeg();
+    if (net && !netOffline) { try { net.sendHello(helloPayload()); } catch {} } // tell guests the new length
+  }
+});
+
 $("brandHome").addEventListener("click", () => { location.hash = ""; showHome(); });
 
 function showHome() {
@@ -1261,5 +1541,7 @@ function route() {
 window.addEventListener("hashchange", route);
 
 initTheme();
+chosenDurationMs = store.dur() || DURATION_MS;
+syncDurationSeg();
 route();
 </script>
