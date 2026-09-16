@@ -334,7 +334,7 @@
           <input class="code grow" id="joinInput" placeholder="…or paste a game link or room code" autocomplete="off" spellcheck="false">
           <button class="btn" id="joinBtn">Join</button>
         </div>
-        <div class="hint">Tip: everyone opening the same link plays the same round. Once you press <b>Start</b>, share the link again for a synchronised timer.</div>
+        <div class="hint">Tip: everyone opening the same link plays the same round. Pressing <b>Start</b> opens a 30-second window to share the link — then the letter is revealed to everyone at once and the 3:00 begins.</div>
       </div>
 
       <div class="steps">
@@ -375,7 +375,7 @@
       <div class="readpanel">
         <div class="readout" id="readout">
           <div>
-            <div class="lbl">time left</div>
+            <div class="lbl" id="timeLbl">time left</div>
             <div class="clock" id="clock">3:00</div>
           </div>
           <div class="lbl" id="phaseLbl">ready</div>
@@ -445,6 +445,7 @@ const CATEGORIES = [
 const LETTERS = "ABCDEFGHIJKLMNOPRSTW"; // classic die: skips Q,U,V,X,Y,Z
 const CATS_PER_GAME = 12;
 const DURATION_MS = 3 * 60 * 1000;
+const BUFFER_MS = 30 * 1000; // share window before the letter drops and the round starts
 
 /* ---------------- Seeded RNG (xmur3 + mulberry32) ---------------- */
 function xmur3(str) {
@@ -580,7 +581,7 @@ function renderSheet() {
     input.autocomplete = "off";
     input.spellcheck = false;
     input.value = answers[i] || "";
-    input.placeholder = state.letter + "…";
+    input.placeholder = state.revealed ? state.letter + "…" : "";
     input.addEventListener("input", () => {
       const a = store.ans(state.seed); a[i] = input.value; store.saveAns(state.seed, a);
     });
@@ -611,38 +612,89 @@ function setInputsEnabled(on) {
   state.cats.forEach((_, i) => { const el = $("ans" + i); if (el) el.disabled = !on; });
 }
 
+function computePhase() {
+  if (!state.start) return { phase: "lobby", remaining: DURATION_MS };
+  const now = Date.now();
+  if (now < state.start) return { phase: "buffer", remaining: state.start - now };
+  const played = now - state.start;
+  if (played < DURATION_MS) return { phase: "play", remaining: DURATION_MS - played };
+  return { phase: "over", remaining: 0 };
+}
+
+function showLetter(animate) {
+  if (state.revealed) return;
+  state.revealed = true;
+  letterEl.textContent = state.letter;
+  state.cats.forEach((_, i) => { const el = $("ans" + i); if (el) el.placeholder = state.letter + "…"; });
+  if (animate) { tileEl.classList.remove("animate"); void tileEl.offsetWidth; tileEl.classList.add("animate"); }
+}
+
+function refreshPhaseUI(phase) {
+  const prev = state.phase;
+  state.phase = phase;
+  $("timeLbl").textContent = phase === "buffer" ? "starts in" : "time left";
+  if (phase === "play" && prev !== "play") {
+    showLetter(true);
+    setInputsEnabled(true);
+    if (prev === "buffer") { const f = $("ans0"); if (f) f.focus(); }
+  }
+  renderControls();
+}
+
 function renderControls() {
   controlsEl.innerHTML = "";
-  const running = state.start && (Date.now() - state.start) < DURATION_MS;
+  const phase = state.phase || computePhase().phase;
 
-  if (!state.start) {
+  const addCopy = (label) => {
+    const b = document.createElement("button");
+    b.className = "btn"; b.textContent = label;
+    b.addEventListener("click", () => copyLink(true));
+    controlsEl.appendChild(b);
+  };
+
+  if (phase === "lobby") {
     const start = document.createElement("button");
-    start.className = "btn primary"; start.textContent = "Start the 3:00 timer";
+    start.className = "btn primary"; start.textContent = "Start round";
     start.addEventListener("click", startRound);
     controlsEl.appendChild(start);
-    boardHint.textContent = "Fill the sheet once you start. Share the link again after starting so everyone's clock matches.";
-  } else if (running) {
-    const copy = document.createElement("button");
-    copy.className = "btn"; copy.textContent = "Copy synced link";
-    copy.addEventListener("click", () => copyLink(true));
-    controlsEl.appendChild(copy);
-    boardHint.textContent = "Timer is live — this link is now synchronised for anyone who opens it.";
+    boardHint.textContent = "Press start for a 30-second window to share the link — then the letter is revealed to everyone at once and the 3:00 begins.";
+  } else if (phase === "buffer") {
+    addCopy("Copy synced link");
+    boardHint.textContent = "Send this link now — everyone who opens it gets the same letter the instant the round begins.";
+  } else if (phase === "play") {
+    addCopy("Copy synced link");
+    boardHint.textContent = "Live — this link is synced for anyone who opens it.";
   } else {
-    boardHint.textContent = "Round over. Read aloud and tally below, or start a fresh round.";
+    boardHint.textContent = "Round over. Read your answers aloud and tally below, or start a fresh round.";
   }
 }
 
 function tick() {
-  if (!state.start) { clockEl.textContent = fmt(DURATION_MS); return; }
-  const remaining = DURATION_MS - (Date.now() - state.start);
-  clockEl.textContent = fmt(remaining);
+  const p = computePhase();
+  if (p.phase !== state.phase) refreshPhaseUI(p.phase);
 
-  const critical = remaining <= 30000 && remaining > 0;
-  clockEl.classList.toggle("warn", remaining <= 60000 && remaining > 0);
-  readoutEl.classList.toggle("critical", critical);
-
-  if (remaining <= 0 && !state.ended) endRound();
-  phaseLbl.textContent = remaining > 0 ? "playing" : "done";
+  if (p.phase === "lobby") {
+    clockEl.textContent = fmt(DURATION_MS);
+    clockEl.classList.remove("warn");
+    readoutEl.classList.remove("critical");
+    phaseLbl.textContent = "ready";
+    return;
+  }
+  if (p.phase === "buffer") {
+    clockEl.textContent = fmt(p.remaining);
+    clockEl.classList.remove("warn");
+    readoutEl.classList.toggle("critical", p.remaining <= 5000);
+    phaseLbl.textContent = "get ready";
+    return;
+  }
+  if (p.phase === "play") {
+    clockEl.textContent = fmt(p.remaining);
+    clockEl.classList.toggle("warn", p.remaining <= 60000);
+    readoutEl.classList.toggle("critical", p.remaining <= 30000);
+    phaseLbl.textContent = "playing";
+    return;
+  }
+  if (!state.ended) endRound();
 }
 
 function startTicker() {
@@ -655,62 +707,57 @@ function stopTicker() { if (ticker) { clearInterval(ticker); ticker = null; } }
 /* ---------------- Round lifecycle ---------------- */
 function loadGame(seed, start) {
   const round = buildRound(seed);
-  state = { seed, start, cats: round.cats, letter: round.letter, ended: false };
+  state = { seed, start, cats: round.cats, letter: round.letter, ended: false, revealed: false, phase: null };
 
   homeEl.style.display = "none";
   gameEl.style.display = "block";
 
-  letterEl.textContent = round.letter;
+  letterEl.textContent = "?";
   roomCode.textContent = seed.toUpperCase();
   renderSheet();
-  renderControls();
-
-  const alreadyOver = start && (Date.now() - start) >= DURATION_MS;
-  const running = start && !alreadyOver;
-
+  setInputsEnabled(false);
   document.body.classList.remove("review");
   buzzerEl.classList.remove("show");
 
-  if (alreadyOver) {
+  const p = computePhase();
+  if (p.phase === "over") {
     state.ended = true;
-    enterReview(false);
+    showLetter(false);
+    enterReview();
   } else {
-    setInputsEnabled(!!running || !start); // enabled while running, and before start (so they can prep? -> keep enabled)
-    if (!start) setInputsEnabled(true);
-    tileEl.classList.add("animate");
     startTicker();
-    if (running) phaseLbl.textContent = "playing"; else phaseLbl.textContent = "ready";
   }
   updateScore();
 }
 
 function startRound() {
-  const start = Date.now();
-  state.start = start;
+  state.start = Date.now() + BUFFER_MS;
   state.ended = false;
-  writeHash(state.seed, start);
-  tileEl.classList.remove("animate"); void tileEl.offsetWidth; tileEl.classList.add("animate");
-  setInputsEnabled(true);
-  renderControls();
+  state.revealed = false;
+  state.phase = null;
+  letterEl.textContent = "?";
+  writeHash(state.seed, state.start);
   startTicker();
-  copyLink(true, "Link copied — timer's running. Share it now!");
-  const first = $("ans0"); if (first) first.focus();
+  copyLink(true, "Link copied — round starts in 30s. Send it now!");
 }
 
 function endRound() {
   state.ended = true;
   stopTicker();
   clockEl.textContent = "0:00";
+  clockEl.classList.remove("warn");
   readoutEl.classList.remove("critical");
-  enterReview(true);
+  showLetter(false);
+  enterReview();
   buzz();
 }
 
-function enterReview(showBanner) {
+function enterReview() {
   document.body.classList.add("review");
   setInputsEnabled(false);
   buzzerEl.classList.add("show");
   phaseLbl.textContent = "done";
+  state.phase = "over";
   renderControls();
   updateScore();
 }
