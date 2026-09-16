@@ -245,6 +245,9 @@
   .flash { position: fixed; inset: 0; pointer-events: none; z-index: 30; background: var(--hot); opacity: 0; }
   @keyframes pageflash { 0%, 100% { opacity: 0; } 50% { opacity: .13; } }
   body.critical .flash { animation: pageflash 1s steps(1,end) infinite; }
+  /* final 10s: faster, darker, stronger (declared after .critical so it wins when both apply) */
+  @keyframes pageflash-fast { 0%, 100% { opacity: 0; } 50% { opacity: .28; } }
+  body.panic .flash { animation: pageflash-fast .5s steps(1,end) infinite; background: color-mix(in srgb, var(--hot) 70%, #000); }
 
   .controls { display: flex; gap: 10px; flex-wrap: wrap; }
   .hint { font-size: 12.5px; color: var(--muted); }
@@ -320,6 +323,7 @@
     .tile.animate .glyph { animation: none; }
     .readout.critical { animation: none; }
     body.critical .flash { animation: none; opacity: .08; }
+    body.panic .flash { animation: none; opacity: .18; }
     .btn { transition: none; }
   }
 </style>
@@ -691,7 +695,7 @@ function tick() {
     clockEl.textContent = fmt(DURATION_MS);
     clockEl.classList.remove("warn");
     readoutEl.classList.remove("critical");
-    document.body.classList.remove("critical");
+    document.body.classList.remove("critical", "panic");
     phaseLbl.textContent = "ready";
     return;
   }
@@ -699,7 +703,7 @@ function tick() {
     clockEl.textContent = fmt(p.remaining);
     clockEl.classList.remove("warn");
     readoutEl.classList.toggle("critical", p.remaining <= 5000);
-    document.body.classList.remove("critical");
+    document.body.classList.remove("critical", "panic");
     phaseLbl.textContent = "get ready";
     return;
   }
@@ -708,6 +712,7 @@ function tick() {
     clockEl.classList.toggle("warn", p.remaining <= 60000);
     readoutEl.classList.toggle("critical", p.remaining <= 30000);
     document.body.classList.toggle("critical", p.remaining <= 30000);
+    document.body.classList.toggle("panic", p.remaining <= 10000);
     phaseLbl.textContent = "playing";
     return;
   }
@@ -733,7 +738,7 @@ function loadGame(seed, start) {
   roomCode.textContent = seed.toUpperCase();
   renderSheet();
   setInputsEnabled(false);
-  document.body.classList.remove("review", "critical");
+  document.body.classList.remove("review", "critical", "panic");
   buzzerEl.classList.remove("show");
 
   const p = computePhase();
@@ -764,7 +769,7 @@ function endRound() {
   clockEl.textContent = "0:00";
   clockEl.classList.remove("warn");
   readoutEl.classList.remove("critical");
-  document.body.classList.remove("critical");
+  document.body.classList.remove("critical", "panic");
   showLetter(false);
   enterReview();
   buzz();
@@ -855,7 +860,7 @@ function showHome() {
   stopTicker();
   gameEl.style.display = "none";
   homeEl.style.display = "block";
-  document.body.classList.remove("review", "critical");
+  document.body.classList.remove("review", "critical", "panic");
 }
 
 /* ---------------- Boot ---------------- */
