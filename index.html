@@ -241,6 +241,11 @@
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
   .readout.critical { animation: pulse 1s steps(1,end) infinite; }
 
+  /* full-page flash in the final seconds — tints everything but never blocks input */
+  .flash { position: fixed; inset: 0; pointer-events: none; z-index: 30; background: var(--hot); opacity: 0; }
+  @keyframes pageflash { 0%, 100% { opacity: 0; } 50% { opacity: .13; } }
+  body.critical .flash { animation: pageflash 1s steps(1,end) infinite; }
+
   .controls { display: flex; gap: 10px; flex-wrap: wrap; }
   .hint { font-size: 12.5px; color: var(--muted); }
 
@@ -314,6 +319,7 @@
   @media (prefers-reduced-motion: reduce) {
     .tile.animate .glyph { animation: none; }
     .readout.critical { animation: none; }
+    body.critical .flash { animation: none; opacity: .08; }
     .btn { transition: none; }
   }
 </style>
@@ -336,7 +342,7 @@
           <input class="code grow" id="joinInput" placeholder="…or paste a game link or room code" autocomplete="off" spellcheck="false">
           <button class="btn" id="joinBtn">Join</button>
         </div>
-        <div class="hint">Tip: everyone opening the same link plays the same round. Pressing <b>Start</b> opens a 20-second window to share the link — then the letter is revealed to everyone at once and the 3:00 begins.</div>
+        <div class="hint">Tip: everyone opening the same link plays the same round. Pressing <b>Start</b> opens a 30-second window to share the link — then the letter is revealed to everyone at once and the 3:00 begins.</div>
       </div>
 
       <div class="steps">
@@ -408,6 +414,7 @@
   </section>
 </div>
 
+<div class="flash" aria-hidden="true"></div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -452,7 +459,7 @@ const CATEGORIES = [
 const LETTERS = "ABCDEFGHIJKLMNOPRSTW"; // classic die: skips Q,U,V,X,Y,Z
 const CATS_PER_GAME = 12;
 const DURATION_MS = 3 * 60 * 1000;
-const BUFFER_MS = 20 * 1000; // share window before the letter drops and the round starts
+const BUFFER_MS = 30 * 1000; // share window before the letter drops and the round starts
 
 /* ---------------- Seeded RNG (xmur3 + mulberry32) ---------------- */
 function xmur3(str) {
@@ -684,6 +691,7 @@ function tick() {
     clockEl.textContent = fmt(DURATION_MS);
     clockEl.classList.remove("warn");
     readoutEl.classList.remove("critical");
+    document.body.classList.remove("critical");
     phaseLbl.textContent = "ready";
     return;
   }
@@ -691,6 +699,7 @@ function tick() {
     clockEl.textContent = fmt(p.remaining);
     clockEl.classList.remove("warn");
     readoutEl.classList.toggle("critical", p.remaining <= 5000);
+    document.body.classList.remove("critical");
     phaseLbl.textContent = "get ready";
     return;
   }
@@ -698,6 +707,7 @@ function tick() {
     clockEl.textContent = fmt(p.remaining);
     clockEl.classList.toggle("warn", p.remaining <= 60000);
     readoutEl.classList.toggle("critical", p.remaining <= 30000);
+    document.body.classList.toggle("critical", p.remaining <= 30000);
     phaseLbl.textContent = "playing";
     return;
   }
@@ -723,7 +733,7 @@ function loadGame(seed, start) {
   roomCode.textContent = seed.toUpperCase();
   renderSheet();
   setInputsEnabled(false);
-  document.body.classList.remove("review");
+  document.body.classList.remove("review", "critical");
   buzzerEl.classList.remove("show");
 
   const p = computePhase();
@@ -754,6 +764,7 @@ function endRound() {
   clockEl.textContent = "0:00";
   clockEl.classList.remove("warn");
   readoutEl.classList.remove("critical");
+  document.body.classList.remove("critical");
   showLetter(false);
   enterReview();
   buzz();
@@ -844,7 +855,7 @@ function showHome() {
   stopTicker();
   gameEl.style.display = "none";
   homeEl.style.display = "block";
-  document.body.classList.remove("review");
+  document.body.classList.remove("review", "critical");
 }
 
 /* ---------------- Boot ---------------- */
