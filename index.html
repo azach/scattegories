@@ -365,8 +365,8 @@
 
   /* summary screen */
   .summary { display: none; }
-  body.summary .summary { display: block; }
-  body.summary .board, body.summary .sheet, body.summary .totalbar, body.summary .buzzer, body.summary .lobby { display: none !important; }
+  body.insummary .summary { display: block; }
+  body.insummary .board, body.insummary .sheet, body.insummary .totalbar, body.insummary .buzzer, body.insummary .lobby { display: none !important; }
   .winner {
     font-family: 'Big Shoulders Display', sans-serif; font-weight: 800;
     font-size: clamp(30px, 7vw, 48px); line-height: 1.05; color: var(--accent); margin-top: 6px; text-wrap: balance;
@@ -926,7 +926,7 @@ function applyRound(seed, startAt, round, durationMs) {
   peerAnswers = {};
   myAnswersShared = false;
 
-  document.body.classList.remove("inlobby", "review", "critical", "panic");
+  document.body.classList.remove("inlobby", "review", "critical", "panic", "insummary");
   buzzerEl.classList.remove("show");
   letterEl.textContent = "?";
   renderSheet();
@@ -1085,7 +1085,7 @@ function showSummary(sum) {
   stopTicker(); stopKlaxon();
   buzzerEl.classList.remove("show");
   document.body.classList.remove("inlobby", "review", "critical", "panic");
-  document.body.classList.add("summary");
+  document.body.classList.add("insummary");
   renderSummary(sum || { players: [], rounds: [] });
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
@@ -1166,7 +1166,7 @@ function resetToLobby() {
   buzzerEl.classList.remove("show");
   letterEl.textContent = "?";
   sheetEl.innerHTML = "";
-  document.body.classList.remove("summary", "review", "critical", "panic");
+  document.body.classList.remove("insummary", "review", "critical", "panic");
   document.body.classList.add("inlobby");
   onNetStatus();
 }
@@ -1521,7 +1521,7 @@ function showHome() {
   stopTicker(); stopKlaxon();
   gameEl.style.display = "none";
   homeEl.style.display = "block";
-  document.body.classList.remove("review", "critical", "panic", "inlobby");
+  document.body.classList.remove("review", "critical", "panic", "inlobby", "insummary");
   state = { room: null, created: false, round: 0, seed: null, start: null, cats: [], letter: "", ended: false, revealed: false, phase: null };
 }
 
