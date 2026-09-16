@@ -245,9 +245,13 @@
   .flash { position: fixed; inset: 0; pointer-events: none; z-index: 30; background: var(--hot); opacity: 0; }
   @keyframes pageflash { 0%, 100% { opacity: 0; } 50% { opacity: .13; } }
   body.critical .flash { animation: pageflash 1s steps(1,end) infinite; }
-  /* final 10s: faster, darker, stronger (declared after .critical so it wins when both apply) */
-  @keyframes pageflash-fast { 0%, 100% { opacity: 0; } 50% { opacity: .28; } }
-  body.panic .flash { animation: pageflash-fast .5s steps(1,end) infinite; background: color-mix(in srgb, var(--hot) 70%, #000); }
+  /* final 10s: faster, and alternates between the critical tint and a deep dark red
+     (never fully transparent, so it's less jarring). Declared after .critical so it wins. */
+  @keyframes pageflash-fast {
+    0%, 100% { background: var(--hot); opacity: .14; }
+    50% { background: color-mix(in srgb, var(--hot) 42%, #000); opacity: .38; }
+  }
+  body.panic .flash { animation: pageflash-fast .5s steps(1,end) infinite; }
 
   .controls { display: flex; gap: 10px; flex-wrap: wrap; }
   .hint { font-size: 12.5px; color: var(--muted); }
@@ -323,7 +327,7 @@
     .tile.animate .glyph { animation: none; }
     .readout.critical { animation: none; }
     body.critical .flash { animation: none; opacity: .08; }
-    body.panic .flash { animation: none; opacity: .18; }
+    body.panic .flash { animation: none; opacity: .34; background: color-mix(in srgb, var(--hot) 42%, #000); }
     .btn { transition: none; }
   }
 </style>
@@ -696,6 +700,7 @@ function tick() {
     clockEl.classList.remove("warn");
     readoutEl.classList.remove("critical");
     document.body.classList.remove("critical", "panic");
+    stopKlaxon();
     phaseLbl.textContent = "ready";
     return;
   }
@@ -704,6 +709,7 @@ function tick() {
     clockEl.classList.remove("warn");
     readoutEl.classList.toggle("critical", p.remaining <= 5000);
     document.body.classList.remove("critical", "panic");
+    stopKlaxon();
     phaseLbl.textContent = "get ready";
     return;
   }
@@ -713,6 +719,7 @@ function tick() {
     readoutEl.classList.toggle("critical", p.remaining <= 30000);
     document.body.classList.toggle("critical", p.remaining <= 30000);
     document.body.classList.toggle("panic", p.remaining <= 10000);
+    if (p.remaining <= 10000) startKlaxon(); else stopKlaxon();
     phaseLbl.textContent = "playing";
     return;
   }
@@ -739,6 +746,7 @@ function loadGame(seed, start) {
   renderSheet();
   setInputsEnabled(false);
   document.body.classList.remove("review", "critical", "panic");
+  stopKlaxon();
   buzzerEl.classList.remove("show");
 
   const p = computePhase();
@@ -759,6 +767,7 @@ function startRound() {
   state.phase = null;
   letterEl.textContent = "?";
   writeHash(state.seed, state.start);
+  getCtx(); // unlock audio on this user gesture so the klaxon can play later
   startTicker();
   copyLink(true, `Link copied — round starts in ${BUFFER_MS / 1000}s. Send it now!`);
 }
@@ -770,6 +779,7 @@ function endRound() {
   clockEl.classList.remove("warn");
   readoutEl.classList.remove("critical");
   document.body.classList.remove("critical", "panic");
+  stopKlaxon();
   showLetter(false);
   enterReview();
   buzz();
@@ -785,12 +795,66 @@ function enterReview() {
   updateScore();
 }
 
-/* soft buzzer via WebAudio (no assets) */
-function buzz() {
+/* ---------------- WebAudio (no assets) ---------------- */
+let audioCtx = null;
+let klaxon = null;
+
+function getCtx() {
   try {
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) return;
-    const ctx = new AC();
+    if (!audioCtx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      audioCtx = new AC();
+    }
+    if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+    return audioCtx;
+  } catch { return null; }
+}
+
+/* two-tone warning klaxon that loops through the final seconds */
+function startKlaxon() {
+  if (klaxon) return;
+  const ctx = getCtx();
+  if (!ctx) return;
+  try {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sawtooth";
+    gain.gain.value = 0.0001;
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start();
+    let hi = true;
+    const step = () => {
+      const t = ctx.currentTime;
+      osc.frequency.setValueAtTime(hi ? 660 : 495, t);
+      gain.gain.cancelScheduledValues(t);
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.08, t + 0.04);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.42);
+      hi = !hi;
+    };
+    step();
+    klaxon = { osc, gain, timer: setInterval(step, 500) };
+  } catch {}
+}
+
+function stopKlaxon() {
+  if (!klaxon) return;
+  try {
+    clearInterval(klaxon.timer);
+    const t = audioCtx ? audioCtx.currentTime : 0;
+    klaxon.gain.gain.cancelScheduledValues(t);
+    klaxon.gain.gain.setValueAtTime(0.0001, t);
+    klaxon.osc.stop(t + 0.05);
+  } catch {}
+  klaxon = null;
+}
+
+/* final buzzer at time-up */
+function buzz() {
+  const ctx = getCtx();
+  if (!ctx) return;
+  try {
     const o = ctx.createOscillator(), g = ctx.createGain();
     o.type = "square"; o.frequency.value = 220;
     g.gain.setValueAtTime(0.0001, ctx.currentTime);
@@ -861,6 +925,7 @@ function showHome() {
   gameEl.style.display = "none";
   homeEl.style.display = "block";
   document.body.classList.remove("review", "critical", "panic");
+  stopKlaxon();
 }
 
 /* ---------------- Boot ---------------- */
