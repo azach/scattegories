@@ -1357,7 +1357,7 @@ async function joinRoomNet(roomId) {
 }
 
 function helloPayload() { return { name: myName, created: !!state.created, dur: chosenDurationMs }; }
-function roundPayload() { return { seed: state.seed, startAt: state.start, round: state.round }; }
+function roundPayload() { return { seed: state.seed, startAt: state.start, round: state.round, durationMs: state.durationMs }; }
 function answerPayload() { return { name: myName, answers: store.ans(state.seed), round: state.round }; }
 function broadcastAnswers() {
   if (net && !netOffline) { try { net.sendAns(answerPayload()); myAnswersShared = true; } catch {} }
