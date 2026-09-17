@@ -835,6 +835,12 @@ function renderControls() {
   if (phase === "buffer") {
     boardHint.textContent = "Get ready — the letter drops for everyone at once.";
   } else if (phase === "play") {
+    if (isHost()) {
+      const er = document.createElement("button");
+      er.className = "btn"; er.textContent = "End round";
+      er.addEventListener("click", hostEndRound);
+      controlsEl.appendChild(er);
+    }
     const b = document.createElement("button");
     b.className = "btn"; b.textContent = "Copy room link";
     b.addEventListener("click", () => copyShare());
@@ -949,6 +955,12 @@ function startRoundAsHost() {
   getCtx(); // unlock audio on this user gesture so the klaxon can play later
   if (net && !netOffline) { try { net.sendState({ seed, startAt, round, durationMs }); } catch {} }
   applyRound(seed, startAt, round, durationMs);
+}
+
+function hostEndRound() {
+  if (state.ended || state.phase === "over" || !state.seed) return;
+  if (net && !netOffline) { try { net.sendEndNow({ round: state.round }); } catch {} }
+  endRound();
 }
 
 function endRound() {
@@ -1305,11 +1317,13 @@ async function joinRoomNet(roomId) {
   const scoreAct = room.makeAction("score");
   const finishAct = room.makeAction("finish");
   const resetAct = room.makeAction("reset");
+  const endAct = room.makeAction("endnow");
   const mkSend = (act) => (payload, target) => act.send(payload, target ? { target } : undefined);
   net = {
     room,
     sendHello: mkSend(helloAct), sendState: mkSend(stateAct), sendAns: mkSend(ansAct),
-    sendScore: mkSend(scoreAct), sendFinish: mkSend(finishAct), sendReset: mkSend(resetAct)
+    sendScore: mkSend(scoreAct), sendFinish: mkSend(finishAct), sendReset: mkSend(resetAct),
+    sendEndNow: mkSend(endAct)
   };
   netOffline = false; netReady = true;
 
@@ -1344,6 +1358,11 @@ async function joinRoomNet(roomId) {
   };
   finishAct.onMessage = (data) => { showSummary(data || { players: [], rounds: [] }); };
   resetAct.onMessage = () => { resetToLobby(); };
+  endAct.onMessage = (data) => {
+    if (state.ended || state.phase === "over" || !state.seed) return;
+    if (data && data.round != null && data.round !== state.round) return; // only end the current round
+    endRound();
+  };
 
   room.onPeerJoin = (peerId) => { try { net.sendHello(helloPayload(), peerId); } catch {} onNetStatus(); };
   room.onPeerLeave = (peerId) => {
