@@ -155,7 +155,7 @@
   .stack { display: flex; flex-direction: column; gap: 12px; }
   .row { display: flex; gap: 12px; flex-wrap: wrap; }
   .grow { flex: 1 1 200px; }
-  input.code {
+  input.code, textarea.code {
     width: 100%;
     background: var(--surface);
     border: 1px solid var(--line);
@@ -163,10 +163,22 @@
     border-radius: 11px;
     padding: 12px 14px;
     font-size: 16px;
-    font-family: 'JetBrains Mono', monospace;
-    letter-spacing: .06em;
   }
-  input.code::placeholder { color: var(--faint); letter-spacing: 0; font-family: 'Hanken Grotesk', sans-serif; }
+  input.code { font-family: 'JetBrains Mono', monospace; letter-spacing: .06em; }
+  textarea.code { font-family: 'Hanken Grotesk', sans-serif; resize: vertical; min-height: 92px; line-height: 1.5; }
+  input.code::placeholder, textarea.code::placeholder { color: var(--faint); letter-spacing: 0; font-family: 'Hanken Grotesk', sans-serif; }
+
+  .customcats { margin-bottom: 18px; }
+  .customcats summary {
+    cursor: pointer; font-size: 13px; color: var(--muted); font-weight: 600;
+    list-style: none; display: flex; align-items: center; gap: 4px;
+  }
+  .customcats summary::-webkit-details-marker { display: none; }
+  .customcats summary::before { content: "+"; color: var(--accent); font-weight: 700; }
+  .customcats[open] summary::before { content: "–"; }
+  .customcats summary:hover { color: var(--ink); }
+  .customcats textarea { margin-top: 10px; }
+  .customcats .hint2 { font-size: 12px; color: var(--faint); margin-top: 6px; }
 
   .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 26px; }
   .step { display: flex; flex-direction: column; gap: 6px; }
@@ -298,6 +310,7 @@
     color: var(--muted); border-radius: 8px; padding: 4px 10px; font-size: 12.5px; font-weight: 600;
   }
   body.review .scorebtn { display: inline-flex; align-items: center; gap: 6px; width: fit-content; }
+  .scorebtn:disabled { opacity: .4; cursor: default; }
   .scorebtn.on { background: color-mix(in srgb, var(--good) 22%, transparent); border-color: var(--good); color: var(--good); }
   .scorebtn .dot { width: 8px; height: 8px; border-radius: 50%; border: 2px solid currentColor; }
   .scorebtn.on .dot { background: var(--good); border-color: var(--good); }
@@ -421,7 +434,7 @@
       <div class="stack">
         <button class="btn primary" id="newGame" style="font-size:17px; padding:16px;">Start a new game</button>
         <div class="row">
-          <input class="code grow" id="joinInput" placeholder="…or paste a game link or room code" autocomplete="off" spellcheck="false">
+          <input class="code grow" id="joinInput" placeholder="…or paste a game link or 5-letter code" autocomplete="off" spellcheck="false">
           <button class="btn" id="joinBtn">Join</button>
         </div>
         <div class="hint">Tip: everyone opens the same room link and lands in the lobby. The host starts the round; the letter is revealed to all at once and the 3:00 begins together.</div>
@@ -469,6 +482,11 @@
             <button type="button" data-ms="300000">5 min</button>
           </div>
         </div>
+        <details class="customcats" id="customCatsRow" hidden>
+          <summary id="customCatsSummary">Custom categories (optional)</summary>
+          <textarea class="code" id="customCatsInput" rows="4" placeholder="One per line, e.g.&#10;80s movies&#10;Local pub names&#10;Types of pasta"></textarea>
+          <div class="hint2" id="customCatsHint"></div>
+        </details>
         <div class="roster" id="roster"></div>
         <div class="controls" id="lobbyControls"></div>
         <div class="hint" id="lobbyHint" style="margin-top:10px;"></div>
@@ -604,20 +622,39 @@ function rngFor(seed) {
   const seeder = xmur3("letterround::" + seed);
   return mulberry32(seeder());
 }
-function buildRound(seed) {
-  const rng = rngFor(seed);
-  const pool = CATEGORIES.slice();
+function shuffle(arr, rng) {
+  const a = arr.slice();
   // Fisher–Yates with seeded rng
-  for (let i = pool.length - 1; i > 0; i--) {
+  for (let i = a.length - 1; i > 0; i--) {
     const j = Math.floor(rng() * (i + 1));
-    [pool[i], pool[j]] = [pool[j], pool[i]];
+    [a[i], a[j]] = [a[j], a[i]];
   }
-  const cats = pool.slice(0, CATS_PER_GAME);
+  return a;
+}
+function buildRound(seed, customCats) {
+  const rng = rngFor(seed);
+  const custom = (customCats || []).filter(Boolean);
+  let cats;
+  if (custom.length >= CATS_PER_GAME) {
+    cats = shuffle(custom, rng).slice(0, CATS_PER_GAME);
+  } else if (custom.length > 0) {
+    const fillerPool = CATEGORIES.filter(c => !custom.includes(c));
+    const fillers = shuffle(fillerPool, rng).slice(0, CATS_PER_GAME - custom.length);
+    cats = shuffle(custom.concat(fillers), rng); // reshuffle so custom ones aren't always first
+  } else {
+    cats = shuffle(CATEGORIES, rng).slice(0, CATS_PER_GAME);
+  }
   const letter = LETTERS[Math.floor(rng() * LETTERS.length)];
   return { cats, letter };
 }
 function newSeed() {
   return (Date.now().toString(36) + Math.random().toString(36).slice(2, 6)).slice(-7);
+}
+function newRoomCode() {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz";
+  let s = "";
+  for (let i = 0; i < 5; i++) s += alphabet[Math.floor(Math.random() * alphabet.length)];
+  return s;
 }
 
 /* ---------------- Hash routing (room-based) ---------------- */
@@ -646,7 +683,27 @@ const store = {
   name() { try { return localStorage.getItem("lr.name"); } catch { return null; } },
   saveName(v) { try { localStorage.setItem("lr.name", v); } catch {} },
   dur() { try { return parseInt(localStorage.getItem("lr.dur") || "", 10) || null; } catch { return null; } },
-  saveDur(v) { try { localStorage.setItem("lr.dur", String(v)); } catch {} }
+  saveDur(v) { try { localStorage.setItem("lr.dur", String(v)); } catch {} },
+  customCats() { try { return localStorage.getItem("lr.customcats") || ""; } catch { return ""; } },
+  saveCustomCats(v) { try { localStorage.setItem("lr.customcats", v); } catch {} },
+  // per-room persistence, so a refresh/reconnect can restore this device's view of the room
+  pid(room) { try { return localStorage.getItem("lr.pid." + room); } catch { return null; } },
+  savePid(room, v) { try { localStorage.setItem("lr.pid." + room, v); } catch {} },
+  created(room) { try { return localStorage.getItem("lr.created." + room) === "1"; } catch { return false; } },
+  saveCreated(room) { try { localStorage.setItem("lr.created." + room, "1"); } catch {} },
+  sessionScores(room) { try { return JSON.parse(localStorage.getItem("lr.scores." + room) || "{}"); } catch { return {}; } },
+  saveSessionScores(room, obj) { try { localStorage.setItem("lr.scores." + room, JSON.stringify(obj)); } catch {} },
+  roundState(room) { try { return JSON.parse(localStorage.getItem("lr.round." + room) || "null"); } catch { return null; } },
+  saveRoundState(room, obj) { try { localStorage.setItem("lr.round." + room, JSON.stringify(obj)); } catch {} },
+  clearRoundState(room) { try { localStorage.removeItem("lr.round." + room); } catch {} },
+  summary(room) { try { return JSON.parse(localStorage.getItem("lr.summary." + room) || "null"); } catch { return null; } },
+  saveSummary(room, obj) { try { localStorage.setItem("lr.summary." + room, JSON.stringify(obj)); } catch {} },
+  clearSummary(room) { try { localStorage.removeItem("lr.summary." + room); } catch {} },
+  // Bumped every "New game" reset. Round numbers restart at 0 each game, so this is what
+  // lets a stale/reconnecting peer tell "an earlier round of a new game" from "an old round
+  // of the game that already finished" — round number alone can't disambiguate that.
+  epoch(room) { try { return parseInt(localStorage.getItem("lr.epoch." + room) || "0", 10) || 0; } catch { return 0; } },
+  saveEpoch(room, v) { try { localStorage.setItem("lr.epoch." + room, String(v)); } catch {} }
 };
 
 /* ---------------- Elements ---------------- */
@@ -661,6 +718,19 @@ const scoreNum = $("scoreNum");
 let state = { room: null, created: false, round: 0, seed: null, start: null, durationMs: DURATION_MS, cats: [], letter: "", ended: false, revealed: false, phase: null };
 let ticker = null;
 let chosenDurationMs = DURATION_MS; // host's lobby selection for the next round
+let customCategories = [];          // host's lobby-entered categories for the next round (optional)
+
+function parseCustomCats(text) {
+  const seen = new Set();
+  const out = [];
+  (text || "").split("\n").forEach(line => {
+    const v = line.trim();
+    if (!v || v.length > 60 || seen.has(v)) return;
+    seen.add(v);
+    out.push(v);
+  });
+  return out.slice(0, 60);
+}
 let sessionScores = {};            // peerId -> { name, rounds: { roundNum: score } } — cumulative across the room session
 
 /* ---------------- Networking state (Trystero P2P) ---------------- */
@@ -669,8 +739,9 @@ let net = null;           // { room, sendHello, sendState, sendAns }
 let netReady = false;     // room joined successfully
 let netOffline = false;   // couldn't reach signalling — solo fallback
 let mySelfId = "self";
-let roster = {};          // peerId -> { name, created }
-let peerAnswers = {};     // peerId -> { name, answers, round }
+let myPid = null;         // stable per-room player id, persisted across reloads (transport peerId is not)
+let roster = {};          // peerId -> { name, created, pid }
+let peerAnswers = {};     // pid -> { name, answers, round }
 let myName = "";
 let myAnswersShared = false;
 
@@ -745,7 +816,7 @@ function renderSheet() {
   });
 }
 
-function selfKey() { return mySelfId || "self"; }
+function selfKey() { return myPid || mySelfId || "self"; }
 
 function recordScore(id, name, round, score) {
   if (round == null) return;
@@ -753,6 +824,7 @@ function recordScore(id, name, round, score) {
   if (name) entry.name = name;
   entry.rounds[round] = score;
   sessionScores[id] = entry;
+  if (state.room) store.saveSessionScores(state.room, sessionScores);
 }
 
 function cumulativeOf(id) {
@@ -761,13 +833,30 @@ function cumulativeOf(id) {
   return Object.values(entry.rounds).reduce((a, b) => a + (b || 0), 0);
 }
 
+// Gossip merge: fold a peer's view of the room's scores into ours without ever
+// letting a stale remote copy clobber our own authoritative entry.
+function mergeSessionScores(remote) {
+  if (!remote) return;
+  Object.keys(remote).forEach(id => {
+    if (id === selfKey()) return;
+    const r = remote[id];
+    if (!r) return;
+    const cur = sessionScores[id] || { name: r.name || "Player", rounds: {} };
+    if (r.name) cur.name = r.name;
+    Object.keys(r.rounds || {}).forEach(rd => { if (cur.rounds[rd] == null) cur.rounds[rd] = r.rounds[rd]; });
+    sessionScores[id] = cur;
+  });
+  if (state.room) store.saveSessionScores(state.room, sessionScores);
+  if (document.body.classList.contains("review") || document.body.classList.contains("insummary")) renderScoreboard();
+}
+
 function updateScore() {
   const sc = store.score(state.seed);
   const myRound = Object.values(sc).filter(Boolean).length;
   if (scoreNum) scoreNum.textContent = myRound;
   recordScore(selfKey(), myName, state.round, myRound);
   if (document.body.classList.contains("review")) {
-    if (net && !netOffline) { try { net.sendScore({ round: state.round, score: myRound, name: myName }); } catch {} }
+    if (net && !netOffline) { try { net.sendScore({ round: state.round, score: myRound, name: myName, pid: myPid }); } catch {} }
     renderScoreboard();
   }
 }
@@ -897,15 +986,32 @@ function startTicker() {
 function stopTicker() { if (ticker) { clearInterval(ticker); ticker = null; } }
 
 /* ---------------- Room + round lifecycle ---------------- */
+function ensurePid(room) {
+  let pid = store.pid(room);
+  if (!pid) { pid = "p" + Math.random().toString(36).slice(2, 10); store.savePid(room, pid); }
+  return pid;
+}
+
 function enterRoom(roomId, created) {
   roomId = (roomId || "").toLowerCase();
   if (!roomId) return;
   teardownNet();
   stopTicker(); stopKlaxon();
+
+  // Restore this device's last-known view of the room (if any) so a refresh, a dropped
+  // connection, or a screen lock doesn't lose host status or scores — the network then
+  // reconciles anything that changed while we were away.
+  const effectiveCreated = !!created || store.created(roomId);
+  if (effectiveCreated) store.saveCreated(roomId);
+  myPid = ensurePid(roomId);
+  const savedScores = store.sessionScores(roomId);
+  const savedRound = store.roundState(roomId);
+  const savedEpoch = store.epoch(roomId);
+
   roster = {}; peerAnswers = {}; myAnswersShared = false;
-  sessionScores = {};
+  sessionScores = savedScores || {};
   netReady = false; netOffline = false;
-  state = { room: roomId, created: !!created, round: 0, seed: null, start: null, durationMs: chosenDurationMs, cats: [], letter: "", ended: false, revealed: false, phase: "lobby" };
+  state = { room: roomId, created: effectiveCreated, round: 0, seed: null, start: null, durationMs: chosenDurationMs, cats: [], letter: "", ended: false, revealed: false, phase: "lobby", epoch: savedEpoch };
 
   homeEl.style.display = "none";
   gameEl.style.display = "block";
@@ -918,16 +1024,49 @@ function enterRoom(roomId, created) {
   writeHashRoom(roomId);
 
   ensureName();
+
+  const savedSummary = store.summary(roomId);
+  if (savedSummary) {
+    showSummary(savedSummary);
+  } else if (savedRound && savedRound.seed && savedRound.start) {
+    applyRound(savedRound.seed, savedRound.start, savedRound.round, savedRound.durationMs, savedRound.ended, savedRound.customCats);
+  }
+
   onNetStatus();
   joinRoomNet(roomId);
 }
 
-function applyRound(seed, startAt, round, durationMs) {
-  const built = buildRound(seed);
+function saveRoundSnapshot() {
+  if (!state.room) return;
+  store.saveRoundState(state.room, { seed: state.seed, start: state.start, round: state.round, durationMs: state.durationMs, ended: state.ended, customCats: state.customCats });
+  store.saveEpoch(state.room, state.epoch || 0);
+}
+
+// Round numbers restart at 0 every "New game", so comparing round numbers alone can't tell
+// "an earlier round of a new game" from "an old round of the game that just finished" — a
+// peer stuck on round 3 of a finished game would reject round 1 of the next game as stale.
+// Epoch (bumped on every reset) disambiguates that; within the same epoch, round order rules.
+function isNewerRound(epoch, round) {
+  if (epoch !== (state.epoch || 0)) return epoch > (state.epoch || 0);
+  return round > state.round;
+}
+function isSameRound(epoch, round) {
+  return epoch === (state.epoch || 0) && round === state.round;
+}
+
+// `ended` lets a round resync carry "this round is already over" even when the round
+// number hasn't changed — the only way a peer who missed the end (joined late, or was
+// disconnected when it happened) can find out, since ending early isn't tied to the clock.
+// `customCats` is broadcast (not derived locally) so every device builds the identical
+// board — the host's lobby textarea is the only source of truth for it.
+function applyRound(seed, startAt, round, durationMs, ended, customCats) {
+  const cats = customCats || [];
+  const built = buildRound(seed, cats);
   state.seed = seed;
   state.start = startAt;
   state.round = (typeof round === "number") ? round : state.round + 1;
   state.durationMs = durationMs || DURATION_MS;
+  state.customCats = cats;
   state.cats = built.cats;
   state.letter = built.letter;
   state.ended = false;
@@ -945,9 +1084,10 @@ function applyRound(seed, startAt, round, durationMs) {
   window.scrollTo({ top: 0, behavior: "smooth" });
 
   const p = computePhase();
-  if (p.phase === "over") { state.ended = true; showLetter(false); enterReview(); }
+  if (p.phase === "over" || ended) { state.ended = true; showLetter(false); enterReview(); }
   else startTicker();
   updateScore();
+  saveRoundSnapshot();
 }
 
 function startRoundAsHost() {
@@ -955,9 +1095,10 @@ function startRoundAsHost() {
   const startAt = Date.now() + LEADIN_MS;
   const round = state.round + 1;
   const durationMs = chosenDurationMs || DURATION_MS;
+  const customCats = customCategories.slice();
   getCtx(); // unlock audio on this user gesture so the klaxon can play later
-  if (net && !netOffline) { try { net.sendState({ seed, startAt, round, durationMs }); } catch {} }
-  applyRound(seed, startAt, round, durationMs);
+  if (net && !netOffline) { try { net.sendState({ seed, startAt, round, durationMs, customCats, epoch: state.epoch || 0 }); } catch {} }
+  applyRound(seed, startAt, round, durationMs, false, customCats);
 }
 
 function hostEndRound() {
@@ -968,6 +1109,7 @@ function hostEndRound() {
 
 function endRound() {
   state.ended = true;
+  saveRoundSnapshot();
   stopTicker();
   clockEl.textContent = "0:00";
   clockEl.classList.remove("warn");
@@ -1007,11 +1149,12 @@ function reviewPlayers() {
 
 function renderReview() {
   const scores = store.score(state.seed);
+  let scoresChanged = false;
   const players = reviewPlayers();
+  const mine = players.find(pl => pl.me);
   sheetEl.innerHTML = "";
   state.cats.forEach((cat, i) => {
     const item = document.createElement("div");
-    item.className = "item" + (scores[i] ? " scored" : "");
 
     const num = document.createElement("div");
     num.className = "num"; num.textContent = (i + 1);
@@ -1039,8 +1182,17 @@ function renderReview() {
     });
     col.appendChild(answers);
 
+    // Can only claim a point for an answer you actually gave, and only if nobody else
+    // matched it — a blank or a duplicate never earns a point, full stop.
+    const myRaw = mine ? (mine.answers[i] || "").trim() : "";
+    const myNorm = normalise(myRaw);
+    const canScore = !!myRaw && counts[myNorm] <= 1;
+    if (!canScore && scores[i]) { delete scores[i]; scoresChanged = true; } // revoke if it's no longer eligible
+
     const sbtn = document.createElement("button");
     sbtn.className = "scorebtn" + (scores[i] ? " on" : "");
+    sbtn.disabled = !canScore;
+    sbtn.title = canScore ? "" : (myRaw ? "Someone else has the same answer" : "You didn't enter an answer");
     sbtn.innerHTML = '<span class="dot"></span> I scored this';
     sbtn.addEventListener("click", () => {
       const sc = store.score(state.seed);
@@ -1051,9 +1203,11 @@ function renderReview() {
     });
     col.appendChild(sbtn);
 
+    item.className = "item" + (scores[i] ? " scored" : "");
     item.appendChild(num); item.appendChild(col);
     sheetEl.appendChild(item);
   });
+  if (scoresChanged) { store.saveScore(state.seed, scores); updateScore(); }
 }
 
 function renderReviewControls() {
@@ -1093,6 +1247,7 @@ function buildSummary() {
 
 function hostFinish() {
   const summary = buildSummary();
+  if (state.room) store.saveSummary(state.room, summary);
   if (net && !netOffline) { try { net.sendFinish(summary); } catch {} }
   showSummary(summary);
 }
@@ -1175,9 +1330,11 @@ function renderSummaryControls() {
   el.appendChild(home);
 }
 
-function resetToLobby() {
+function resetToLobby(epoch) {
+  state.epoch = (typeof epoch === "number") ? epoch : (state.epoch || 0) + 1;
   sessionScores = {}; peerAnswers = {}; myAnswersShared = false;
   state.round = 0; state.seed = null; state.start = null;
+  if (state.room) { store.saveSessionScores(state.room, {}); store.clearRoundState(state.room); store.clearSummary(state.room); store.saveEpoch(state.room, state.epoch); }
   stopTicker(); stopKlaxon();
   buzzerEl.classList.remove("show");
   letterEl.textContent = "?";
@@ -1188,8 +1345,9 @@ function resetToLobby() {
 }
 
 function hostRematch() {
-  if (net && !netOffline) { try { net.sendReset(); } catch {} }
-  resetToLobby();
+  const nextEpoch = (state.epoch || 0) + 1;
+  if (net && !netOffline) { try { net.sendReset({ epoch: nextEpoch }); } catch {} }
+  resetToLobby(nextEpoch);
 }
 
 /* ---------------- WebAudio (no assets) ---------------- */
@@ -1321,46 +1479,98 @@ async function joinRoomNet(roomId) {
   const finishAct = room.makeAction("finish");
   const resetAct = room.makeAction("reset");
   const endAct = room.makeAction("endnow");
+  const syncAct = room.makeAction("sync");
   const mkSend = (act) => (payload, target) => act.send(payload, target ? { target } : undefined);
   net = {
     room,
     sendHello: mkSend(helloAct), sendState: mkSend(stateAct), sendAns: mkSend(ansAct),
     sendScore: mkSend(scoreAct), sendFinish: mkSend(finishAct), sendReset: mkSend(resetAct),
-    sendEndNow: mkSend(endAct)
+    sendEndNow: mkSend(endAct), sendSync: mkSend(syncAct)
   };
   netOffline = false; netReady = true;
 
+  // Every hello (first join, or a re-announce after a reconnect) triggers a full catch-up via
+  // a single consolidated `sync` payload — round state, scores, and the finish summary if
+  // applicable — gossiped from WHICHEVER peer answers, not just the host, so the room
+  // converges even if the original host is the one who dropped and lost state. This is what
+  // makes a screen-lock / refresh / mid-game rejoin self-heal without anyone re-sharing the link.
   helloAct.onMessage = (data, meta) => {
     const peerId = meta && meta.peerId;
     if (!peerId) return;
-    roster[peerId] = { name: (data && data.name) || "Player", created: !!(data && data.created), dur: (data && data.dur) || null };
+    roster[peerId] = { name: (data && data.name) || "Player", created: !!(data && data.created), dur: (data && data.dur) || null, pid: (data && data.pid) || peerId };
     onNetStatus();
-    if (isHost() && state.start) { try { net.sendState(roundPayload(), peerId); } catch {} }
+    try { net.sendSync(syncPayload(), peerId); } catch {}
     if (myAnswersShared && document.body.classList.contains("review")) { try { net.sendAns(answerPayload(), peerId); } catch {} }
   };
   stateAct.onMessage = (data) => {
     if (!data || typeof data.startAt !== "number") return;
-    if (state.seed && typeof data.round === "number" && data.round <= state.round) return; // ignore stale/duplicate
-    applyRound(data.seed, data.startAt, data.round, data.durationMs);
+    const epoch = typeof data.epoch === "number" ? data.epoch : 0;
+    if (state.seed) {
+      if (isSameRound(epoch, data.round)) {
+        // Same round we already have — the only new information a resend can carry is that
+        // it ended (ending early isn't clock-driven, so a peer who missed that message, or
+        // joined mid-round, has no other way to learn it).
+        if (data.ended && !state.ended) endRound();
+        return;
+      }
+      if (!isNewerRound(epoch, data.round)) return; // stale
+    }
+    if (epoch > (state.epoch || 0)) resetToLobby(epoch); // new game generation — drop stale scores first
+    applyRound(data.seed, data.startAt, data.round, data.durationMs, !!data.ended, data.customCats);
   };
   ansAct.onMessage = (data, meta) => {
     const peerId = meta && meta.peerId;
     if (!data || !peerId) return;
+    const pid = data.pid || peerId;
     const fallbackName = (roster[peerId] && roster[peerId].name) || "Player";
-    peerAnswers[peerId] = { name: data.name || fallbackName, answers: data.answers || {}, round: data.round };
-    if (sessionScores[peerId] == null || sessionScores[peerId].rounds[data.round] == null) {
-      recordScore(peerId, data.name || fallbackName, data.round, 0); // show them on the board at 0 until they tick
+    peerAnswers[pid] = { name: data.name || fallbackName, answers: data.answers || {}, round: data.round };
+    if (sessionScores[pid] == null || sessionScores[pid].rounds[data.round] == null) {
+      recordScore(pid, data.name || fallbackName, data.round, 0); // show them on the board at 0 until they tick
     }
     if (document.body.classList.contains("review")) { renderReview(); renderScoreboard(); }
   };
   scoreAct.onMessage = (data, meta) => {
     const peerId = meta && meta.peerId;
-    if (!data || !peerId) return;
-    recordScore(peerId, data.name, data.round, data.score || 0);
+    if (!data) return;
+    const pid = data.pid || peerId;
+    if (!pid) return;
+    recordScore(pid, data.name, data.round, data.score || 0);
     if (document.body.classList.contains("review")) renderScoreboard();
   };
-  finishAct.onMessage = (data) => { showSummary(data || { players: [], rounds: [] }); };
-  resetAct.onMessage = () => { resetToLobby(); };
+  syncAct.onMessage = (data) => {
+    if (!data) return;
+    const epoch = typeof data.epoch === "number" ? data.epoch : 0;
+    if (epoch < (state.epoch || 0)) return; // they're behind us; their scores are for a game we've moved past
+    if (epoch > (state.epoch || 0)) {
+      // A newer game generation than the one we're tracking — round numbers restart at 0
+      // each game, so our old sessionScores/round would otherwise get corrupted by mixing
+      // with the new game's. Drop them first, then adopt whatever the sender has.
+      resetToLobby(epoch);
+    }
+    mergeSessionScores(data.scores); // safe now: same epoch on both sides
+    if (data.summary) {
+      if (state.room) store.saveSummary(state.room, data.summary);
+      if (!document.body.classList.contains("insummary")) showSummary(data.summary);
+      else renderSummary(data.summary);
+      return;
+    }
+    if (data.round && typeof data.round.startAt === "number") {
+      const r = data.round;
+      if (!state.seed || isNewerRound(epoch, r.round)) {
+        applyRound(r.seed, r.startAt, r.round, r.durationMs, !!r.ended, r.customCats);
+      } else if (isSameRound(epoch, r.round) && r.ended && !state.ended) {
+        endRound();
+      }
+    }
+    // Otherwise the sender is in the lobby too (no round, no summary) — if we just adopted
+    // their epoch above, we're already correctly there; nothing further to do.
+  };
+  finishAct.onMessage = (data) => {
+    const summary = data || { players: [], rounds: [] };
+    if (state.room) store.saveSummary(state.room, summary);
+    showSummary(summary);
+  };
+  resetAct.onMessage = (data) => { resetToLobby(data && typeof data.epoch === "number" ? data.epoch : undefined); };
   endAct.onMessage = (data) => {
     if (state.ended || state.phase === "over" || !state.seed) return;
     if (data && data.round != null && data.round !== state.round) return; // only end the current round
@@ -1369,18 +1579,37 @@ async function joinRoomNet(roomId) {
 
   room.onPeerJoin = (peerId) => { try { net.sendHello(helloPayload(), peerId); } catch {} onNetStatus(); };
   room.onPeerLeave = (peerId) => {
-    delete roster[peerId]; delete peerAnswers[peerId];
+    // Only drop presence — keep their answers/scores. A dropped connection (screen lock,
+    // background tab) is usually temporary, and we don't want the review grid to blank
+    // someone out just because their peer connection blipped.
+    delete roster[peerId];
     onNetStatus();
-    if (document.body.classList.contains("review")) renderReview();
   };
 
   try { net.sendHello(helloPayload()); } catch {}
+  try { net.sendSync(syncPayload()); } catch {}
+  if (document.body.classList.contains("review") && !myAnswersShared) {
+    broadcastAnswers();
+    updateScore();
+  }
   onNetStatus();
 }
 
-function helloPayload() { return { name: myName, created: !!state.created, dur: chosenDurationMs }; }
-function roundPayload() { return { seed: state.seed, startAt: state.start, round: state.round, durationMs: state.durationMs }; }
-function answerPayload() { return { name: myName, answers: store.ans(state.seed), round: state.round }; }
+function helloPayload() { return { name: myName, created: !!state.created, dur: chosenDurationMs, pid: myPid }; }
+function roundPayload() {
+  return state.seed
+    ? { seed: state.seed, startAt: state.start, round: state.round, durationMs: state.durationMs, ended: state.ended, customCats: state.customCats }
+    : null;
+}
+function syncPayload() {
+  return {
+    epoch: state.epoch || 0,
+    scores: sessionScores,
+    round: roundPayload(),
+    summary: document.body.classList.contains("insummary") ? buildSummary() : null
+  };
+}
+function answerPayload() { return { name: myName, answers: store.ans(state.seed), round: state.round, pid: myPid }; }
 function broadcastAnswers() {
   if (net && !netOffline) { try { net.sendAns(answerPayload()); myAnswersShared = true; } catch {} }
 }
@@ -1444,6 +1673,9 @@ function renderLobbyControls() {
   const durRow = $("durationRow");
   if (durRow) durRow.hidden = false;
   syncDurationSeg();
+  const ccRow = $("customCatsRow");
+  if (ccRow) ccRow.hidden = !isHost();
+  updateCustomCatsSummary();
   el.innerHTML = "";
   const copy = document.createElement("button");
   copy.className = "btn"; copy.textContent = "Copy room link";
@@ -1481,7 +1713,7 @@ function onNetStatus() {
 }
 
 /* ---------------- Wiring ---------------- */
-$("newGame").addEventListener("click", () => { enterRoom(newSeed(), true); });
+$("newGame").addEventListener("click", () => { enterRoom(newRoomCode(), true); });
 
 function doJoin() {
   const raw = $("joinInput").value.trim();
@@ -1537,6 +1769,23 @@ $("durationSeg").addEventListener("click", (e) => {
   }
 });
 
+function updateCustomCatsSummary() {
+  const s = $("customCatsSummary");
+  if (s) s.textContent = "Custom categories" + (customCategories.length ? " — " + customCategories.length + " set" : " (optional)");
+  const ccHint = $("customCatsHint");
+  if (ccHint) {
+    ccHint.textContent = customCategories.length
+      ? customCategories.length + " custom categor" + (customCategories.length === 1 ? "y" : "ies") + " will be mixed in"
+      : "Leave blank to use the default category pool";
+  }
+}
+$("customCatsInput").addEventListener("input", () => {
+  const val = $("customCatsInput").value;
+  store.saveCustomCats(val);
+  customCategories = parseCustomCats(val);
+  updateCustomCatsSummary();
+});
+
 $("brandHome").addEventListener("click", () => { location.hash = ""; showHome(); });
 
 function showHome() {
@@ -1545,7 +1794,7 @@ function showHome() {
   gameEl.style.display = "none";
   homeEl.style.display = "block";
   document.body.classList.remove("review", "critical", "panic", "inlobby", "insummary");
-  state = { room: null, created: false, round: 0, seed: null, start: null, cats: [], letter: "", ended: false, revealed: false, phase: null };
+  state = { room: null, created: false, round: 0, seed: null, start: null, cats: [], letter: "", ended: false, revealed: false, phase: null, epoch: 0 };
 }
 
 /* ---------------- Boot ---------------- */
@@ -1563,8 +1812,45 @@ function route() {
 }
 window.addEventListener("hashchange", route);
 
+/* ---------------- Resilience: reconnect + audio unlock ---------------- */
+// iOS suspends a fresh AudioContext until it's resumed inside a real user gesture, and
+// guests never otherwise trigger one (only the host's "Start round" click did). Resuming
+// on every tap — and whenever the tab comes back to the foreground — keeps the klaxon
+// working even after the context gets auto-suspended by a screen lock or backgrounding.
+document.addEventListener("pointerdown", () => getCtx(), { passive: true });
+
+function reconnectNet() {
+  if (!state.room) return;
+  if (!netReady && !netOffline) return; // a join is already in flight
+  const roomId = state.room;
+  teardownNet();
+  netReady = false; netOffline = false;
+  onNetStatus();
+  joinRoomNet(roomId);
+}
+document.addEventListener("visibilitychange", () => {
+  getCtx();
+  if (document.visibilityState === "visible" && state.room) reconnectNet();
+});
+window.addEventListener("pageshow", () => { if (state.room) reconnectNet(); });
+window.addEventListener("online", () => { if (state.room) reconnectNet(); });
+
+// Periodic re-announce (hello + a full state sync) so the room self-heals from a silently
+// dropped connection (mobile screen lock, backgrounded tab) without anyone noticing or
+// re-sharing the link — this is what keeps "the entire game state" converged continuously,
+// not just at the moment someone joins.
+setInterval(() => {
+  if (state.room && net && !netOffline) {
+    try { net.sendHello(helloPayload()); } catch {}
+    try { net.sendSync(syncPayload()); } catch {}
+  }
+}, 25000);
+
 initTheme();
 chosenDurationMs = store.dur() || DURATION_MS;
+customCategories = parseCustomCats(store.customCats());
+$("customCatsInput").value = store.customCats();
+updateCustomCatsSummary();
 syncDurationSeg();
 route();
 </script>
