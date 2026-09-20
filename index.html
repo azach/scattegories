@@ -850,6 +850,21 @@ function mergeSessionScores(remote) {
   if (document.body.classList.contains("review") || document.body.classList.contains("insummary")) renderScoreboard();
 }
 
+// No-clobber merge: an answer is immutable once submitted, so it's always safe to fill in
+// one we don't have yet, and never necessary (or correct) to overwrite one we already do.
+function mergeReviewAnswers(remote) {
+  if (!remote || !document.body.classList.contains("review")) return;
+  let changed = false;
+  Object.keys(remote).forEach(pid => {
+    if (pid === myPid || peerAnswers[pid]) return;
+    const r = remote[pid];
+    if (!r) return;
+    peerAnswers[pid] = { name: r.name || "Player", answers: r.answers || {}, round: state.round };
+    changed = true;
+  });
+  if (changed) { renderReview(); renderScoreboard(); }
+}
+
 function updateScore() {
   const sc = store.score(state.seed);
   const myRound = Object.values(sc).filter(Boolean).length;
@@ -1564,6 +1579,7 @@ async function joinRoomNet(roomId) {
     }
     // Otherwise the sender is in the lobby too (no round, no summary) — if we just adopted
     // their epoch above, we're already correctly there; nothing further to do.
+    mergeReviewAnswers(data.answers);
   };
   finishAct.onMessage = (data) => {
     const summary = data || { players: [], rounds: [] };
@@ -1601,12 +1617,27 @@ function roundPayload() {
     ? { seed: state.seed, startAt: state.start, round: state.round, durationMs: state.durationMs, ended: state.ended, customCats: state.customCats }
     : null;
 }
+// Everything this device knows about the current round's answers — its own plus anyone
+// else's it has learned — so a late/reconnecting peer can recover a submitted answer even
+// if the player who submitted it has since disconnected entirely (no one else would ever
+// relay it otherwise: each peer only ever pushed its OWN answer, never forwarded others').
+function reviewAnswersPayload() {
+  if (!document.body.classList.contains("review") || !state.seed) return null;
+  const all = {};
+  if (myAnswersShared) all[myPid] = { name: myName, answers: store.ans(state.seed) };
+  Object.keys(peerAnswers).forEach(pid => {
+    const p = peerAnswers[pid];
+    if (p && (p.round == null || p.round === state.round)) all[pid] = { name: p.name, answers: p.answers };
+  });
+  return Object.keys(all).length ? all : null;
+}
 function syncPayload() {
   return {
     epoch: state.epoch || 0,
     scores: sessionScores,
     round: roundPayload(),
-    summary: document.body.classList.contains("insummary") ? buildSummary() : null
+    summary: document.body.classList.contains("insummary") ? buildSummary() : null,
+    answers: reviewAnswersPayload()
   };
 }
 function answerPayload() { return { name: myName, answers: store.ans(state.seed), round: state.round, pid: myPid }; }
