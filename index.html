@@ -199,12 +199,23 @@
   .brandmini { display: inline-flex; align-items: baseline; gap: 10px; background: none; border: none; padding: 0; margin: 0; cursor: pointer; color: inherit; }
   .brandmini:hover b { color: var(--accent); }
   .brandmini b { font-family: 'Big Shoulders Display', sans-serif; font-weight: 800; font-size: 22px; letter-spacing: .01em; transition: color .15s ease; }
+  .codewrap { position: relative; }
   .codepill {
-    display: inline-flex; align-items: center; gap: 8px;
+    display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
     background: var(--surface); border: 1px solid var(--line);
     border-radius: 999px; padding: 6px 14px; font-size: 13px; color: var(--muted);
   }
   .codepill .val { font-family: 'JetBrains Mono', monospace; font-weight: 700; color: var(--ink); letter-spacing: .12em; }
+  .connpanel {
+    position: absolute; top: calc(100% + 8px); right: 0; z-index: 40;
+    background: var(--board); border: 1px solid var(--line); border-radius: 14px;
+    padding: 14px 16px; box-shadow: var(--shadow);
+    min-width: 220px; max-width: min(300px, calc(100vw - 40px));
+    opacity: 0; pointer-events: none; transform: translateY(-4px);
+    transition: opacity .15s ease, transform .15s ease;
+  }
+  .connpanel .roster { margin: 0; }
+  .codewrap:hover .connpanel, .codewrap.open .connpanel { opacity: 1; pointer-events: auto; transform: none; }
 
   /* marquee / hero board */
   .board {
@@ -376,6 +387,12 @@
     font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 700; letter-spacing: .1em;
     text-transform: uppercase; color: var(--accent-ink); background: var(--accent); border-radius: 999px; padding: 2px 8px;
   }
+  .player .conn {
+    font-family: 'JetBrains Mono', monospace; font-size: 9px; font-weight: 700; letter-spacing: .08em;
+    text-transform: uppercase; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted);
+  }
+  .player .conn.direct { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, var(--line)); }
+  .player .conn.relay { color: var(--hot); border-color: color-mix(in srgb, var(--hot) 45%, var(--line)); }
   .player .me { margin-left: auto; color: var(--faint); font-weight: 500; font-size: 12px; }
   .waiting { color: var(--muted); font-size: 14px; }
   .offline-note { color: var(--hot); font-size: 13px; margin-top: 10px; }
@@ -445,6 +462,13 @@
         <div class="step"><div class="n">2</div><b>Beat the clock</b><p>The host starts the round. Fill an answer for each category that begins with the chosen letter before 3:00 runs out.</p></div>
         <div class="step"><div class="n">3</div><b>Compare &amp; score</b><p>At time-up everyone's answers appear side by side, duplicates flagged. Tick the ones only you got — 1 point each.</p></div>
       </div>
+
+      <details class="customcats" id="turnRow" style="margin-top:18px;">
+        <summary id="turnSummary">Advanced: TURN relay (optional)</summary>
+        <div class="hint" style="margin-bottom:8px;">If direct connections fail on your network (common on public wifi), paste TURN server credentials here — e.g. the free tier from <a href="https://dashboard.metered.ca/signup" target="_blank" rel="noopener">Metered</a>. Paste the whole snippet they give you; stored only in this browser, never sent anywhere but into your own connection.</div>
+        <textarea class="code" id="turnInput" rows="5" placeholder="Paste your TURN credentials snippet here"></textarea>
+        <div class="hint2" id="turnHint"></div>
+      </details>
     </div>
 
     <div class="footer">
@@ -459,10 +483,16 @@
       <button class="brandmini" id="brandHome" type="button" title="Back to home" aria-label="Back to home">
         <b>THE LETTER ROUND</b>
       </button>
-      <div class="codepill" id="codepill">
-        <span class="status" aria-hidden="true"></span>
-        room <span class="val" id="roomCode">—</span>
-        <span class="count" id="playerCount"></span>
+      <div class="codewrap" id="codeWrap">
+        <div class="codepill" id="codepill" tabindex="0">
+          <span class="status" aria-hidden="true"></span>
+          room <span class="val" id="roomCode">—</span>
+          <span class="count" id="playerCount"></span>
+        </div>
+        <div class="connpanel" id="connPanel">
+          <div class="eyebrow" style="margin-bottom:8px;">Who's here</div>
+          <div class="roster" id="connList"></div>
+        </div>
       </div>
     </div>
 
@@ -686,6 +716,8 @@ const store = {
   saveDur(v) { try { localStorage.setItem("lr.dur", String(v)); } catch {} },
   customCats() { try { return localStorage.getItem("lr.customcats") || ""; } catch { return ""; } },
   saveCustomCats(v) { try { localStorage.setItem("lr.customcats", v); } catch {} },
+  turnPaste() { try { return localStorage.getItem("lr.turnpaste") || ""; } catch { return ""; } },
+  saveTurnPaste(v) { try { localStorage.setItem("lr.turnpaste", v); } catch {} },
   // per-room persistence, so a refresh/reconnect can restore this device's view of the room
   pid(room) { try { return localStorage.getItem("lr.pid." + room); } catch { return null; } },
   savePid(room, v) { try { localStorage.setItem("lr.pid." + room, v); } catch {} },
@@ -742,6 +774,7 @@ let mySelfId = "self";
 let myPid = null;         // stable per-room player id, persisted across reloads (transport peerId is not)
 let roster = {};          // peerId -> { name, created, pid }
 let peerAnswers = {};     // pid -> { name, answers, round }
+let connectionTypes = {}; // peerId -> "direct" | "relay" (from inspecting each RTCPeerConnection)
 let myName = "";
 let myAnswersShared = false;
 
@@ -1023,7 +1056,7 @@ function enterRoom(roomId, created) {
   const savedRound = store.roundState(roomId);
   const savedEpoch = store.epoch(roomId);
 
-  roster = {}; peerAnswers = {}; myAnswersShared = false;
+  roster = {}; peerAnswers = {}; myAnswersShared = false; connectionTypes = {};
   sessionScores = savedScores || {};
   netReady = false; netOffline = false;
   state = { room: roomId, created: effectiveCreated, round: 0, seed: null, start: null, durationMs: chosenDurationMs, cats: [], letter: "", ended: false, revealed: false, phase: "lobby", epoch: savedEpoch };
@@ -1471,6 +1504,33 @@ async function loadTrystero() {
   return null;
 }
 
+// Optional TURN relay for networks where direct P2P can't connect at all — strict symmetric
+// NAT or client-isolated public wifi, which STUN alone never gets through. Nothing is baked
+// into this file: each device pastes its own credentials (e.g. a free Metered account) into
+// the "Advanced" box on the home page, kept only in that browser's localStorage. Only one
+// side of a given connection needs this configured for that pairwise link to have a shot at
+// relaying — the other side just needs ordinary outbound internet access to reach it.
+let turnConfig = [];
+function parseTurnPaste(text) {
+  if (!text || !text.trim()) return [];
+  let s = text;
+  const m = s.match(/iceServers\s*:\s*(\[[\s\S]*\])/); // pull the array out of a full snippet
+  if (m) {
+    s = m[1];
+  } else {
+    const start = s.indexOf("["), end = s.lastIndexOf("]");
+    if (start === -1 || end === -1 || end <= start) return [];
+    s = s.slice(start, end + 1);
+  }
+  s = s
+    .replace(/,\s*([\]}])/g, "$1")              // trailing commas
+    .replace(/([{,]\s*)(\w+)\s*:/g, '$1"$2":');  // unquoted keys -> valid JSON
+  try {
+    const arr = JSON.parse(s);
+    return Array.isArray(arr) ? arr.filter(e => e && e.urls) : [];
+  } catch { return []; }
+}
+
 function teardownNet() {
   try { if (net && net.room && net.room.leave) net.room.leave(); } catch {}
   net = null; netReady = false;
@@ -1483,7 +1543,19 @@ async function joinRoomNet(roomId) {
   mySelfId = mod.selfId || "self";
   let room;
   try {
-    room = mod.joinRoom({ appId: "the-letter-round-v1", password: roomId }, roomId);
+    // Only include turnConfig when it's actually non-empty — passing an empty array could
+    // replace Trystero's default STUN servers instead of adding nothing, which would break
+    // ordinary direct connections too, not just the TURN fallback.
+    const roomConfig = { appId: "the-letter-round-v1", password: roomId };
+    if (turnConfig.length) {
+      // Once TURN is configured, commit to it rather than letting ICE race it against
+      // direct/STUN — that race is exactly what was causing connections to flap between
+      // "direct" and "relay" instead of settling on one persistent path. STUN entries are
+      // pointless under a relay-only policy (no host/srflx candidates are even gathered),
+      // so this intentionally doesn't inherit Trystero's default STUN servers.
+      roomConfig.rtcConfig = { iceServers: turnConfig, iceTransportPolicy: "relay" };
+    }
+    room = mod.joinRoom(roomConfig, roomId);
   } catch (e) { netOffline = true; onNetStatus(); return; }
 
   // Trystero 0.25 API: makeAction returns an object; send targets a peer via { target }.
@@ -1593,12 +1665,17 @@ async function joinRoomNet(roomId) {
     endRound();
   };
 
-  room.onPeerJoin = (peerId) => { try { net.sendHello(helloPayload(), peerId); } catch {} onNetStatus(); };
+  room.onPeerJoin = (peerId) => {
+    try { net.sendHello(helloPayload(), peerId); } catch {}
+    onNetStatus();
+    setTimeout(refreshConnectionTypes, 2500); // give ICE a moment to actually negotiate
+  };
   room.onPeerLeave = (peerId) => {
     // Only drop presence — keep their answers/scores. A dropped connection (screen lock,
     // background tab) is usually temporary, and we don't want the review grid to blank
     // someone out just because their peer connection blipped.
     delete roster[peerId];
+    delete connectionTypes[peerId];
     onNetStatus();
   };
 
@@ -1609,6 +1686,35 @@ async function joinRoomNet(roomId) {
     updateScore();
   }
   onNetStatus();
+  setTimeout(refreshConnectionTypes, 1500);
+}
+
+// Inspects each live RTCPeerConnection's active candidate pair to tell whether it ended up
+// direct (STUN/host) or relayed through TURN — the same thing chrome://webrtc-internals
+// shows, surfaced in the roster itself so it works on every device, including phones.
+async function refreshConnectionTypes() {
+  if (!net || !net.room || typeof net.room.getPeers !== "function") return;
+  let peers;
+  try { peers = net.room.getPeers(); } catch { return; }
+  const entries = peers instanceof Map ? [...peers.entries()] : Object.entries(peers || {});
+  let changed = false;
+  await Promise.all(entries.map(async ([peerId, pc]) => {
+    if (!pc || typeof pc.getStats !== "function") return;
+    try {
+      const stats = await pc.getStats();
+      let type = null;
+      stats.forEach(s => {
+        if (s.type === "candidate-pair" && s.state === "succeeded") {
+          const local = stats.get(s.localCandidateId);
+          const remote = stats.get(s.remoteCandidateId);
+          const relay = (local && local.candidateType === "relay") || (remote && remote.candidateType === "relay");
+          type = relay ? "relay" : "direct";
+        }
+      });
+      if (type && connectionTypes[peerId] !== type) { connectionTypes[peerId] = type; changed = true; }
+    } catch {}
+  }));
+  if (changed) renderRoster();
 }
 
 function helloPayload() { return { name: myName, created: !!state.created, dur: chosenDurationMs, pid: myPid }; }
@@ -1650,6 +1756,7 @@ function hostId() {
     .concat(Object.keys(roster).map(id => ({ id, created: !!roster[id].created })));
   const creators = all.filter(p => p.created).map(p => p.id).sort();
   if (creators.length) return creators[0];
+  if (Object.keys(roster).length === 0) return state.created ? (mySelfId || "self") : null; // alone: no idea who the host is yet
   return all.map(p => p.id).sort()[0];
 }
 function isHost() {
@@ -1671,8 +1778,9 @@ function ensureName() {
   const inp = $("nameInput");
   if (inp) inp.value = myName;
 }
-function renderRoster() {
-  const el = $("roster");
+// Shared between the lobby roster and the header's "who's here" popover, so both always
+// show the identical, live player/connection list regardless of which is visible right now.
+function renderPlayerRows(el) {
   if (!el) return;
   const host = hostId();
   const list = [{ id: mySelfId || "self", name: myName, me: true }]
@@ -1690,6 +1798,16 @@ function renderRoster() {
       b.className = "badge"; b.textContent = "host";
       row.appendChild(b);
     }
+    if (!p.me) {
+      const ct = connectionTypes[p.id];
+      if (ct) {
+        const c = document.createElement("span");
+        c.className = "conn " + ct;
+        c.textContent = ct;
+        c.title = ct === "relay" ? "Connected via TURN relay — direct connection was blocked" : "Connected directly, peer-to-peer";
+        row.appendChild(c);
+      }
+    }
     if (p.me) {
       const m = document.createElement("span");
       m.className = "me"; m.textContent = "you";
@@ -1697,6 +1815,10 @@ function renderRoster() {
     }
     el.appendChild(row);
   });
+}
+function renderRoster() {
+  renderPlayerRows($("roster"));
+  renderPlayerRows($("connList"));
 }
 function renderLobbyControls() {
   const el = $("lobbyControls");
@@ -1817,6 +1939,23 @@ $("customCatsInput").addEventListener("input", () => {
   updateCustomCatsSummary();
 });
 
+function updateTurnHint() {
+  const s = $("turnSummary");
+  if (s) s.textContent = "Advanced: TURN relay" + (turnConfig.length ? " — " + turnConfig.length + " server(s) configured" : " (optional)");
+  const h = $("turnHint");
+  if (h) {
+    h.textContent = turnConfig.length
+      ? turnConfig.length + " relay server(s) configured — this device will always connect through them"
+      : ($("turnInput").value.trim() ? "Couldn't find any valid servers in that — double-check the paste" : "Leave blank unless direct connections are failing on your network");
+  }
+}
+$("turnInput").addEventListener("input", () => {
+  const val = $("turnInput").value;
+  store.saveTurnPaste(val);
+  turnConfig = parseTurnPaste(val);
+  updateTurnHint();
+});
+
 $("brandHome").addEventListener("click", () => { location.hash = ""; showHome(); });
 
 function showHome() {
@@ -1859,9 +1998,17 @@ function reconnectNet() {
   onNetStatus();
   joinRoomNet(roomId);
 }
+let hiddenSince = null;
 document.addEventListener("visibilitychange", () => {
   getCtx();
-  if (document.visibilityState === "visible" && state.room) reconnectNet();
+  if (document.visibilityState === "hidden") { hiddenSince = Date.now(); return; }
+  // Only force a reconnect after being away a while (a real screen lock or backgrounding) —
+  // visibilitychange also fires on an ordinary tab switch or the devtools panel stealing
+  // focus, and reconnecting on every one of those was flapping an otherwise healthy
+  // connection (and needlessly re-creating TURN allocations every time).
+  const wasHiddenAWhile = hiddenSince && (Date.now() - hiddenSince > 15000);
+  hiddenSince = null;
+  if (wasHiddenAWhile && state.room) reconnectNet();
 });
 window.addEventListener("pageshow", () => { if (state.room) reconnectNet(); });
 window.addEventListener("online", () => { if (state.room) reconnectNet(); });
@@ -1877,11 +2024,31 @@ setInterval(() => {
   }
 }, 25000);
 
+// Keep polling each peer's actual candidate-pair type — ICE negotiation (especially with a
+// TURN round-trip) can easily take longer than the one-shot checks after joining, so a single
+// early check can permanently miss it. Runs regardless of phase, since the "who's here"
+// popover in the header is visible throughout the game, not just the lobby.
+setInterval(() => {
+  if (state.room && net && !netOffline) refreshConnectionTypes();
+}, 3000);
+
+$("codepill").addEventListener("click", (e) => {
+  e.stopPropagation();
+  $("codeWrap").classList.toggle("open");
+});
+document.addEventListener("click", (e) => {
+  const wrap = $("codeWrap");
+  if (wrap && !wrap.contains(e.target)) wrap.classList.remove("open");
+});
+
 initTheme();
 chosenDurationMs = store.dur() || DURATION_MS;
 customCategories = parseCustomCats(store.customCats());
 $("customCatsInput").value = store.customCats();
 updateCustomCatsSummary();
+turnConfig = parseTurnPaste(store.turnPaste());
+$("turnInput").value = store.turnPaste();
+updateTurnHint();
 syncDurationSeg();
 route();
 </script>
