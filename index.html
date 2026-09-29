@@ -423,14 +423,20 @@
 
   /* reactions: strip appears on hover (desktop) or tap (touch); emoji float up for everyone */
   .ansrow { position: relative; cursor: pointer; border-radius: 6px; }
-  .ansrow .reacts { display: none; gap: 2px; margin-left: auto; flex: none; }
+  /* floats just above the row as an overlay toolbar, so revealing it never reflows or wraps the answer */
+  .ansrow .reacts {
+    display: none; gap: 2px; position: absolute; right: 4px; bottom: calc(100% - 2px); z-index: 5;
+    background: var(--board); border: 1px solid var(--line); border-radius: 999px; padding: 3px;
+    box-shadow: 0 8px 18px -10px rgba(0,0,0,.45);
+  }
   .ansrow:hover .reacts, .ansrow.picking .reacts { display: inline-flex; }
   .ansrow:hover, .ansrow.picking { background: color-mix(in srgb, var(--accent) 10%, transparent); }
   .reacts button {
-    border: 1px solid var(--line); background: var(--surface); border-radius: 999px;
-    font-size: 15px; line-height: 1; padding: 3px 6px; cursor: pointer;
-    transition: transform .08s ease;
+    border: none; background: transparent; border-radius: 999px;
+    font-size: 17px; line-height: 1; padding: 4px 6px; cursor: pointer;
+    transition: transform .08s ease, background .12s ease;
   }
+  .reacts button:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
   .reacts button:active { transform: scale(1.25); }
   .floatmoji {
     position: fixed; z-index: 45; pointer-events: none;
@@ -438,6 +444,11 @@
     animation: floatup 1.9s cubic-bezier(.2,.7,.3,1) forwards;
   }
   .floatmoji .e { font-size: 30px; line-height: 1; }
+  .floatmoji.score .e {
+    font-family: 'Big Shoulders Display', sans-serif; font-weight: 800; font-size: 26px;
+    color: #fff; background: var(--good); border-radius: 999px; padding: 3px 12px;
+    box-shadow: 0 6px 16px -8px rgba(0,0,0,.5);
+  }
   .floatmoji .n {
     font-size: 10px; font-weight: 700; color: var(--accent-ink); background: var(--accent);
     border-radius: 999px; padding: 1px 6px; white-space: nowrap; max-width: 110px; overflow: hidden; text-overflow: ellipsis;
@@ -1240,7 +1251,8 @@ function reviewPlayers() {
 }
 
 /* ---------------- Reactions ---------------- */
-const REACTIONS = ["🧠", "👏", "💩", "🙅"];
+const REACTIONS = ["🧠", "😂", "💩", "🙅", "🦀", "👻"];
+const SCORE_MARK = "+1"; // floated when someone claims a point, via the same channel as reactions
 let openReactKey = null;     // "cat:pid" of the row whose emoji strip is open (survives re-renders)
 let reactSendTimes = [];     // recent send timestamps, for rate limiting
 
@@ -1251,7 +1263,7 @@ function findAnswerRow(cat, pid) {
 }
 
 function spawnReaction(cat, pid, emoji, fromName) {
-  if (!REACTIONS.includes(emoji)) return; // only ever render our own fixed set, never arbitrary peer input
+  if (!REACTIONS.includes(emoji) && emoji !== SCORE_MARK) return; // only ever render our own fixed set, never arbitrary peer input
   if (document.querySelectorAll(".floatmoji").length > 60) return; // keep a spam storm from bogging the page down
   const row = findAnswerRow(cat, pid);
   let x, y;
@@ -1265,7 +1277,7 @@ function spawnReaction(cat, pid, emoji, fromName) {
     y = window.innerHeight - 40;
   }
   const el = document.createElement("div");
-  el.className = "floatmoji";
+  el.className = "floatmoji" + (emoji === SCORE_MARK ? " score" : "");
   el.style.left = Math.round(x) + "px";
   el.style.top = Math.round(y) + "px";
   el.style.setProperty("--dx", Math.round((Math.random() - 0.5) * 80) + "px");
@@ -1364,6 +1376,7 @@ function renderReview() {
       sbtn.classList.toggle("on", !!sc[i]);
       item.classList.toggle("scored", !!sc[i]);
       updateScore();
+      if (sc[i]) sendReaction(i, myPid, SCORE_MARK); // only on claiming, not un-ticking
     });
     col.appendChild(sbtn);
 
