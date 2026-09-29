@@ -421,6 +421,33 @@
   .ansrow.dupe .who::after { content: " ·dup"; color: var(--faint); }
   .ansrow.blank .val2 { color: var(--faint); font-style: italic; }
 
+  /* reactions: strip appears on hover (desktop) or tap (touch); emoji float up for everyone */
+  .ansrow { position: relative; cursor: pointer; border-radius: 6px; }
+  .ansrow .reacts { display: none; gap: 2px; margin-left: auto; flex: none; }
+  .ansrow:hover .reacts, .ansrow.picking .reacts { display: inline-flex; }
+  .ansrow:hover, .ansrow.picking { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .reacts button {
+    border: 1px solid var(--line); background: var(--surface); border-radius: 999px;
+    font-size: 15px; line-height: 1; padding: 3px 6px; cursor: pointer;
+    transition: transform .08s ease;
+  }
+  .reacts button:active { transform: scale(1.25); }
+  .floatmoji {
+    position: fixed; z-index: 45; pointer-events: none;
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    animation: floatup 1.9s cubic-bezier(.2,.7,.3,1) forwards;
+  }
+  .floatmoji .e { font-size: 30px; line-height: 1; }
+  .floatmoji .n {
+    font-size: 10px; font-weight: 700; color: var(--accent-ink); background: var(--accent);
+    border-radius: 999px; padding: 1px 6px; white-space: nowrap; max-width: 110px; overflow: hidden; text-overflow: ellipsis;
+  }
+  @keyframes floatup {
+    0%   { opacity: 0; transform: translate(0, 0) scale(.6); }
+    12%  { opacity: 1; transform: translate(calc(var(--dx) * .2), -24px) scale(1.1); }
+    100% { opacity: 0; transform: translate(var(--dx), -220px) scale(1); }
+  }
+
   @media (max-width: 620px) {
     .board { grid-template-columns: 1fr; }
     .tile { width: 100%; max-width: 200px; margin: 0 auto; aspect-ratio: 16/10; }
@@ -433,6 +460,8 @@
     body.critical .flash { animation: none; opacity: .4; }
     body.panic .flash { animation: none; opacity: .7; }
     .btn { transition: none; }
+    .floatmoji { animation: fadeonly 1.4s ease forwards; }
+    @keyframes fadeonly { 0% { opacity: 0; } 15% { opacity: 1; } 100% { opacity: 0; } }
   }
 </style>
 
@@ -1137,6 +1166,7 @@ function applyRound(seed, startAt, round, durationMs, ended, customCats) {
   state.phase = null;
   peerAnswers = {};
   myAnswersShared = false;
+  openReactKey = null;
 
   document.body.classList.remove("inlobby", "review", "critical", "panic", "insummary");
   buzzerEl.classList.remove("show");
@@ -1202,12 +1232,64 @@ function enterReview() {
 function normalise(s) { return (s || "").trim().toLowerCase(); }
 
 function reviewPlayers() {
-  const mine = { name: myName + " (you)", answers: store.ans(state.seed), me: true };
+  const mine = { pid: myPid, name: myName + " (you)", answers: store.ans(state.seed), me: true };
   const others = Object.keys(peerAnswers)
-    .map(id => peerAnswers[id])
-    .filter(p => p.round == null || p.round === state.round)
-    .map(p => ({ name: p.name || "Player", answers: p.answers || {}, me: false }));
+    .filter(pid => { const p = peerAnswers[pid]; return p.round == null || p.round === state.round; })
+    .map(pid => ({ pid, name: peerAnswers[pid].name || "Player", answers: peerAnswers[pid].answers || {}, me: false }));
   return [mine, ...others];
+}
+
+/* ---------------- Reactions ---------------- */
+const REACTIONS = ["🧠", "👏", "💩", "🙅"];
+let openReactKey = null;     // "cat:pid" of the row whose emoji strip is open (survives re-renders)
+let reactSendTimes = [];     // recent send timestamps, for rate limiting
+
+function reactKey(cat, pid) { return cat + ":" + pid; }
+
+function findAnswerRow(cat, pid) {
+  return sheetEl.querySelector('.ansrow[data-cat="' + cat + '"][data-pid="' + CSS.escape(pid) + '"]');
+}
+
+function spawnReaction(cat, pid, emoji, fromName) {
+  if (!REACTIONS.includes(emoji)) return; // only ever render our own fixed set, never arbitrary peer input
+  if (document.querySelectorAll(".floatmoji").length > 60) return; // keep a spam storm from bogging the page down
+  const row = findAnswerRow(cat, pid);
+  let x, y;
+  const r = row && row.getBoundingClientRect();
+  if (r && r.bottom > 0 && r.top < window.innerHeight) {
+    x = r.left + Math.min(r.width - 30, 60 + Math.random() * Math.max(40, r.width - 120));
+    y = r.top;
+  } else {
+    // the answer is scrolled out of view — still show the reaction, rising from the bottom
+    x = 30 + Math.random() * (window.innerWidth - 60);
+    y = window.innerHeight - 40;
+  }
+  const el = document.createElement("div");
+  el.className = "floatmoji";
+  el.style.left = Math.round(x) + "px";
+  el.style.top = Math.round(y) + "px";
+  el.style.setProperty("--dx", Math.round((Math.random() - 0.5) * 80) + "px");
+  const e = document.createElement("span");
+  e.className = "e"; e.textContent = emoji;
+  el.appendChild(e);
+  if (fromName) {
+    const n = document.createElement("span");
+    n.className = "n"; n.textContent = fromName;
+    el.appendChild(n);
+  }
+  el.addEventListener("animationend", () => el.remove());
+  document.body.appendChild(el);
+}
+
+function sendReaction(cat, pid, emoji) {
+  spawnReaction(cat, pid, emoji, myName);
+  // Spamming is the point, but cap what goes over the wire at ~8/sec so a held-down tap
+  // can't flood every peer's data channel. Local animation still plays for every tap.
+  const now = Date.now();
+  reactSendTimes = reactSendTimes.filter(t => now - t < 1000);
+  if (reactSendTimes.length >= 8) return;
+  reactSendTimes.push(now);
+  if (net && !netOffline) { try { net.sendReact({ cat, pid, emoji, round: state.round, epoch: state.epoch || 0, name: myName }); } catch {} }
 }
 
 function renderReview() {
@@ -1235,12 +1317,31 @@ function renderReview() {
       const raw = (pl.answers[i] || "").trim();
       const v = normalise(pl.answers[i]);
       const row = document.createElement("div");
-      row.className = "ansrow" + (!raw ? " blank" : (counts[v] > 1 ? " dupe" : ""));
+      const key = reactKey(i, pl.pid);
+      row.className = "ansrow" + (!raw ? " blank" : (counts[v] > 1 ? " dupe" : "")) + (openReactKey === key ? " picking" : "");
+      row.dataset.cat = i;
+      row.dataset.pid = pl.pid;
       const who = document.createElement("span");
       who.className = "who"; who.textContent = pl.name;
       const val = document.createElement("span");
       val.className = "val2"; val.textContent = raw || "—";
       row.appendChild(who); row.appendChild(val);
+      const reacts = document.createElement("span");
+      reacts.className = "reacts";
+      REACTIONS.forEach(emoji => {
+        const b = document.createElement("button");
+        b.type = "button"; b.textContent = emoji;
+        b.setAttribute("aria-label", "React " + emoji + " to " + pl.name + "'s answer");
+        b.addEventListener("click", (ev) => { ev.stopPropagation(); sendReaction(i, pl.pid, emoji); });
+        reacts.appendChild(b);
+      });
+      row.appendChild(reacts);
+      row.addEventListener("click", () => {
+        const opening = openReactKey !== key;
+        sheetEl.querySelectorAll(".ansrow.picking").forEach(r => r.classList.remove("picking"));
+        openReactKey = opening ? key : null;
+        if (opening) row.classList.add("picking");
+      });
       answers.appendChild(row);
     });
     col.appendChild(answers);
@@ -1584,12 +1685,22 @@ async function joinRoomNet(roomId) {
   const resetAct = room.makeAction("reset");
   const endAct = room.makeAction("endnow");
   const syncAct = room.makeAction("sync");
+  const reactAct = room.makeAction("react");
   const mkSend = (act) => (payload, target) => act.send(payload, target ? { target } : undefined);
   net = {
     room,
     sendHello: mkSend(helloAct), sendState: mkSend(stateAct), sendAns: mkSend(ansAct),
     sendScore: mkSend(scoreAct), sendFinish: mkSend(finishAct), sendReset: mkSend(resetAct),
-    sendEndNow: mkSend(endAct), sendSync: mkSend(syncAct)
+    sendEndNow: mkSend(endAct), sendSync: mkSend(syncAct), sendReact: mkSend(reactAct)
+  };
+
+  // Reactions are deliberately fire-and-forget — they're a live moment, not game state, so
+  // nothing is persisted or re-synced; a peer who missed one simply didn't see it fly by.
+  reactAct.onMessage = (data, meta) => {
+    if (!data || !document.body.classList.contains("review")) return;
+    if (data.round !== state.round || (data.epoch || 0) !== (state.epoch || 0)) return;
+    const fallbackName = (meta && roster[meta.peerId] && roster[meta.peerId].name) || "";
+    spawnReaction(parseInt(data.cat, 10), String(data.pid || ""), data.emoji, String(data.name || fallbackName).slice(0, 20));
   };
   netOffline = false; netReady = true;
 
