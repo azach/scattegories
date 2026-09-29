@@ -851,13 +851,22 @@ function renderSheet() {
 
 function selfKey() { return myPid || mySelfId || "self"; }
 
-function recordScore(id, name, round, score) {
-  if (round == null) return;
+// Scores are mutable (players tick and untick), so each round's score carries a timestamp
+// set by the player who owns it. Only the owner ever changes their own score, so comparing
+// timestamps from the same owner's clock is enough to tell newer from stale — no cross-device
+// clock sync needed. Placeholders use ts 0 so any real value beats them.
+function recordScore(id, name, round, score, ts) {
+  if (round == null) return false;
   const entry = sessionScores[id] || { name: name || "Player", rounds: {} };
+  if (!entry.ts) entry.ts = {};
+  const t = typeof ts === "number" ? ts : 0;
   if (name) entry.name = name;
-  entry.rounds[round] = score;
   sessionScores[id] = entry;
+  if (entry.rounds[round] != null && (entry.ts[round] || 0) > t) return false; // stale
+  entry.rounds[round] = score;
+  entry.ts[round] = t;
   if (state.room) store.saveSessionScores(state.room, sessionScores);
+  return true;
 }
 
 function cumulativeOf(id) {
@@ -866,21 +875,26 @@ function cumulativeOf(id) {
   return Object.values(entry.rounds).reduce((a, b) => a + (b || 0), 0);
 }
 
-// Gossip merge: fold a peer's view of the room's scores into ours without ever
-// letting a stale remote copy clobber our own authoritative entry.
+// Gossip merge: take whichever copy of each round's score is newer (by the owner's timestamp),
+// but never let a remote copy overwrite our own entry — we're the only authority on that.
 function mergeSessionScores(remote) {
   if (!remote) return;
+  let changed = false;
   Object.keys(remote).forEach(id => {
     if (id === selfKey()) return;
     const r = remote[id];
     if (!r) return;
-    const cur = sessionScores[id] || { name: r.name || "Player", rounds: {} };
-    if (r.name) cur.name = r.name;
-    Object.keys(r.rounds || {}).forEach(rd => { if (cur.rounds[rd] == null) cur.rounds[rd] = r.rounds[rd]; });
-    sessionScores[id] = cur;
+    const rts = r.ts || {};
+    Object.keys(r.rounds || {}).forEach(rd => {
+      if (recordScore(id, r.name, rd, r.rounds[rd], rts[rd] || 0)) changed = true;
+    });
   });
-  if (state.room) store.saveSessionScores(state.room, sessionScores);
-  if (document.body.classList.contains("review") || document.body.classList.contains("insummary")) renderScoreboard();
+  if (changed) refreshScoreViews();
+}
+
+function refreshScoreViews() {
+  if (document.body.classList.contains("review")) renderScoreboard();
+  if (document.body.classList.contains("insummary")) renderSummary(buildSummary());
 }
 
 // No-clobber merge: an answer is immutable once submitted, so it's always safe to fill in
@@ -902,9 +916,10 @@ function updateScore() {
   const sc = store.score(state.seed);
   const myRound = Object.values(sc).filter(Boolean).length;
   if (scoreNum) scoreNum.textContent = myRound;
-  recordScore(selfKey(), myName, state.round, myRound);
+  const ts = Date.now();
+  recordScore(selfKey(), myName, state.round, myRound, ts);
   if (document.body.classList.contains("review")) {
-    if (net && !netOffline) { try { net.sendScore({ round: state.round, score: myRound, name: myName, pid: myPid }); } catch {} }
+    if (net && !netOffline) { try { net.sendScore({ round: state.round, score: myRound, name: myName, pid: myPid, ts }); } catch {} }
     renderScoreboard();
   }
 }
@@ -1075,7 +1090,7 @@ function enterRoom(roomId, created) {
 
   const savedSummary = store.summary(roomId);
   if (savedSummary) {
-    showSummary(savedSummary);
+    showSummary();
   } else if (savedRound && savedRound.seed && savedRound.start) {
     applyRound(savedRound.seed, savedRound.start, savedRound.round, savedRound.durationMs, savedRound.ended, savedRound.customCats);
   }
@@ -1293,19 +1308,21 @@ function buildSummary() {
   return { players, rounds: [...roundSet].sort((a, b) => a - b) };
 }
 
+// The summary is always rebuilt from the live, gossiped sessionScores rather than frozen as a
+// snapshot of whatever the host happened to know when they pressed Finish — so a late score
+// update, or a refresh on the summary screen, still converges to the correct final result.
 function hostFinish() {
-  const summary = buildSummary();
-  if (state.room) store.saveSummary(state.room, summary);
-  if (net && !netOffline) { try { net.sendFinish(summary); } catch {} }
-  showSummary(summary);
+  if (state.room) store.saveSummary(state.room, true);
+  if (net && !netOffline) { try { net.sendFinish({ scores: sessionScores }); } catch {} }
+  showSummary();
 }
 
-function showSummary(sum) {
+function showSummary() {
   stopTicker(); stopKlaxon();
   buzzerEl.classList.remove("show");
   document.body.classList.remove("inlobby", "review", "critical", "panic");
   document.body.classList.add("insummary");
-  renderSummary(sum || { players: [], rounds: [] });
+  renderSummary(buildSummary());
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -1621,8 +1638,7 @@ async function joinRoomNet(roomId) {
     if (!data) return;
     const pid = data.pid || peerId;
     if (!pid) return;
-    recordScore(pid, data.name, data.round, data.score || 0);
-    if (document.body.classList.contains("review")) renderScoreboard();
+    if (recordScore(pid, data.name, data.round, data.score || 0, typeof data.ts === "number" ? data.ts : 0)) refreshScoreViews();
   };
   syncAct.onMessage = (data) => {
     if (!data) return;
@@ -1636,9 +1652,8 @@ async function joinRoomNet(roomId) {
     }
     mergeSessionScores(data.scores); // safe now: same epoch on both sides
     if (data.summary) {
-      if (state.room) store.saveSummary(state.room, data.summary);
-      if (!document.body.classList.contains("insummary")) showSummary(data.summary);
-      else renderSummary(data.summary);
+      if (state.room) store.saveSummary(state.room, true);
+      if (!document.body.classList.contains("insummary")) showSummary();
       return;
     }
     if (data.round && typeof data.round.startAt === "number") {
@@ -1654,9 +1669,9 @@ async function joinRoomNet(roomId) {
     mergeReviewAnswers(data.answers);
   };
   finishAct.onMessage = (data) => {
-    const summary = data || { players: [], rounds: [] };
-    if (state.room) store.saveSummary(state.room, summary);
-    showSummary(summary);
+    if (data && data.scores) mergeSessionScores(data.scores);
+    if (state.room) store.saveSummary(state.room, true);
+    showSummary();
   };
   resetAct.onMessage = (data) => { resetToLobby(data && typeof data.epoch === "number" ? data.epoch : undefined); };
   endAct.onMessage = (data) => {
@@ -1742,7 +1757,7 @@ function syncPayload() {
     epoch: state.epoch || 0,
     scores: sessionScores,
     round: roundPayload(),
-    summary: document.body.classList.contains("insummary") ? buildSummary() : null,
+    summary: document.body.classList.contains("insummary"),
     answers: reviewAnswersPayload()
   };
 }
