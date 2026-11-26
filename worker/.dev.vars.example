@@ -1,0 +1,5 @@
+# Copy to .dev.vars for `npm run dev`. These are Cloudflare's published Turnstile *test*
+# keys (always pass) — never use them in production.
+ALLOWED_ORIGINS="http://localhost:8000,http://127.0.0.1:8000"
+TURNSTILE_SECRET="1x0000000000000000000000000000000AA"
+SESSION_SECRET="local-dev-only-not-a-real-secret"

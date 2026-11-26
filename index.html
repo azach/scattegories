@@ -361,6 +361,8 @@
   .codepill .status { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
   .codepill.online .status { background: var(--good); }
   .codepill.offline .status { background: var(--hot); }
+  .codepill.pending .status { background: var(--accent); animation: pendingpulse 1.2s ease-in-out infinite; }
+  @keyframes pendingpulse { 50% { opacity: .35; } }
   .codepill .count { color: var(--muted); }
 
   /* lobby (body.inlobby is the state class; .lobby is the container — keep them distinct) */
@@ -387,15 +389,25 @@
     font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 700; letter-spacing: .1em;
     text-transform: uppercase; color: var(--accent-ink); background: var(--accent); border-radius: 999px; padding: 2px 8px;
   }
-  .player .conn {
-    font-family: 'JetBrains Mono', monospace; font-size: 9px; font-weight: 700; letter-spacing: .08em;
-    text-transform: uppercase; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted);
-  }
-  .player .conn.direct { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, var(--line)); }
-  .player .conn.relay { color: var(--hot); border-color: color-mix(in srgb, var(--hot) 45%, var(--line)); }
   .player .me { margin-left: auto; color: var(--faint); font-weight: 500; font-size: 12px; }
   .waiting { color: var(--muted); font-size: 14px; }
   .offline-note { color: var(--hot); font-size: 13px; margin-top: 10px; }
+  .connstatus { margin-top: 4px; color: var(--muted); }
+  .linkbtn {
+    background: none; border: 0; padding: 0; font: inherit; color: var(--ink); font-weight: 700;
+    text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+  }
+  /* Turnstile renders invisibly; this box only becomes visible if it asks for an interaction */
+  .turnstile-box {
+    position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 1000;
+    pointer-events: none;
+  }
+  .turnstile-box .tslabel { display: none; }
+  .turnstile-box.show {
+    pointer-events: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px 14px; box-shadow: 0 10px 30px rgba(0,0,0,.25);
+  }
+  .turnstile-box.show .tslabel { display: block; font-size: 13px; color: var(--muted); margin-bottom: 8px; }
 
   /* summary screen */
   .summary { display: none; }
@@ -480,11 +492,11 @@
   <!-- ==================== HOME ==================== -->
   <section id="home">
     <div class="home-hero">
-      <div class="eyebrow">A party game · no app, no server, one link</div>
+      <div class="eyebrow">A party game · no app, no sign-up, one link</div>
       <h1 class="marquee">
         <span>THE&nbsp;</span><span class="lit">LETTER&nbsp;</span><span>ROUND</span>
       </h1>
-      <p class="lede">Twelve categories. One letter. Three minutes. Share one room link — everyone plays the same board on a synced clock, then sees each other's answers when time's up. Peer-to-peer, no server.</p>
+      <p class="lede">Twelve categories. One letter. Three minutes. Share one room link — everyone plays the same board on a synced clock, then sees each other's answers when time's up.</p>
     </div>
 
     <div class="panel">
@@ -503,16 +515,10 @@
         <div class="step"><div class="n">3</div><b>Compare &amp; score</b><p>At time-up everyone's answers appear side by side, duplicates flagged. Tick the ones only you got — 1 point each.</p></div>
       </div>
 
-      <details class="customcats" id="turnRow" style="margin-top:18px;">
-        <summary id="turnSummary">Advanced: TURN relay (optional)</summary>
-        <div class="hint" style="margin-bottom:8px;">If direct connections fail on your network (common on public wifi), paste TURN server credentials here — e.g. the free tier from <a href="https://dashboard.metered.ca/signup" target="_blank" rel="noopener">Metered</a>. Paste the whole snippet they give you; stored only in this browser, never sent anywhere but into your own connection.</div>
-        <textarea class="code" id="turnInput" rows="5" placeholder="Paste your TURN credentials snippet here"></textarea>
-        <div class="hint2" id="turnHint"></div>
-      </details>
     </div>
 
     <div class="footer">
-      <span>Peer-to-peer over WebRTC · nothing stored on a server</span>
+      <span>No accounts · answers stay on your device until time's up</span>
       <button class="themebtn" data-theme-toggle>Theme</button>
     </div>
   </section>
@@ -532,6 +538,7 @@
         <div class="connpanel" id="connPanel">
           <div class="eyebrow" style="margin-bottom:8px;">Who's here</div>
           <div class="roster" id="connList"></div>
+          <div class="hint2 connstatus" id="connStatus"></div>
         </div>
       </div>
     </div>
@@ -560,7 +567,7 @@
         <div class="roster" id="roster"></div>
         <div class="controls" id="lobbyControls"></div>
         <div class="hint" id="lobbyHint" style="margin-top:10px;"></div>
-        <div class="offline-note" id="offlineNote" hidden>Couldn't reach the sync network — playing offline. Others won't see this game.</div>
+        <div class="offline-note" id="offlineNote" hidden></div>
       </div>
     </div>
 
@@ -613,7 +620,7 @@
     </div>
 
     <div class="footer">
-      <span>Peer-to-peer · no server · answers shared only when time's up</span>
+      <span>Answers shared only when time's up</span>
       <button class="themebtn" data-theme-toggle>Theme</button>
     </div>
   </section>
@@ -621,6 +628,7 @@
 
 <div class="flash" aria-hidden="true"></div>
 <div class="toast" id="toast"></div>
+<div class="turnstile-box" id="turnstileBox"><div class="tslabel">Quick check before you join…</div></div>
 
 <script>
 "use strict";
@@ -720,6 +728,7 @@ function buildRound(seed, customCats) {
 function newSeed() {
   return (Date.now().toString(36) + Math.random().toString(36).slice(2, 6)).slice(-7);
 }
+const ROOM_CODE_RE = /^[a-z]{5}$/; // must match the server's check
 function newRoomCode() {
   const alphabet = "abcdefghijklmnopqrstuvwxyz";
   let s = "";
@@ -756,8 +765,10 @@ const store = {
   saveDur(v) { try { localStorage.setItem("lr.dur", String(v)); } catch {} },
   customCats() { try { return localStorage.getItem("lr.customcats") || ""; } catch { return ""; } },
   saveCustomCats(v) { try { localStorage.setItem("lr.customcats", v); } catch {} },
-  turnPaste() { try { return localStorage.getItem("lr.turnpaste") || ""; } catch { return ""; } },
-  saveTurnPaste(v) { try { localStorage.setItem("lr.turnpaste", v); } catch {} },
+  // relay-server session ticket (see getTicket) — global, not per room
+  ticket() { try { const t = JSON.parse(localStorage.getItem("lr.ticket") || "null"); return t && t.ticket && t.exp ? t : null; } catch { return null; } },
+  saveTicket(v) { try { localStorage.setItem("lr.ticket", JSON.stringify({ ticket: v.ticket, exp: v.exp })); } catch {} },
+  clearTicket() { try { localStorage.removeItem("lr.ticket"); } catch {} },
   // per-room persistence, so a refresh/reconnect can restore this device's view of the room
   pid(room) { try { return localStorage.getItem("lr.pid." + room); } catch { return null; } },
   savePid(room, v) { try { localStorage.setItem("lr.pid." + room, v); } catch {} },
@@ -805,16 +816,13 @@ function parseCustomCats(text) {
 }
 let sessionScores = {};            // peerId -> { name, rounds: { roundNum: score } } — cumulative across the room session
 
-/* ---------------- Networking state (Trystero P2P) ---------------- */
-let TS = null;            // Trystero module (lazy-loaded)
-let net = null;           // { room, sendHello, sendState, sendAns }
-let netReady = false;     // room joined successfully
-let netOffline = false;   // couldn't reach signalling — solo fallback
-let mySelfId = "self";
-let myPid = null;         // stable per-room player id, persisted across reloads (transport peerId is not)
-let roster = {};          // peerId -> { name, created, pid }
+/* ---------------- Networking state ---------------- */
+let net = null;           // current room connection: socket, retry state, send helpers
+let netReady = false;     // connected and welcomed into the room
+let netOffline = false;   // gave up on (or was refused) a live room — solo fallback
+let myPid = null;         // stable per-room player id, persisted across reloads; the server keys presence on it
+let roster = {};          // pid -> { name, created, dur, pid } for everyone else in the room
 let peerAnswers = {};     // pid -> { name, answers, round }
-let connectionTypes = {}; // peerId -> "direct" | "relay" (from inspecting each RTCPeerConnection)
 let myName = "";
 let myAnswersShared = false;
 
@@ -889,7 +897,7 @@ function renderSheet() {
   });
 }
 
-function selfKey() { return myPid || mySelfId || "self"; }
+function selfKey() { return myPid || "self"; }
 
 // Scores are mutable (players tick and untick), so each round's score carries a timestamp
 // set by the player who owns it. Only the owner ever changes their own score, so comparing
@@ -1111,7 +1119,7 @@ function enterRoom(roomId, created) {
   const savedRound = store.roundState(roomId);
   const savedEpoch = store.epoch(roomId);
 
-  roster = {}; peerAnswers = {}; myAnswersShared = false; connectionTypes = {};
+  roster = {}; peerAnswers = {}; myAnswersShared = false;
   sessionScores = savedScores || {};
   netReady = false; netOffline = false;
   state = { room: roomId, created: effectiveCreated, round: 0, seed: null, start: null, durationMs: chosenDurationMs, cats: [], letter: "", ended: false, revealed: false, phase: "lobby", epoch: savedEpoch };
@@ -1618,125 +1626,302 @@ function fallbackCopy(text, cb) {
   document.body.removeChild(ta);
 }
 
-/* ---------------- Trystero networking ---------------- */
-const TS_CANDIDATES = [
-  "https://esm.sh/trystero@0.25.4/nostr",
-  "https://esm.sh/trystero@0.25.4/mqtt",
-  "https://esm.sh/trystero@0.25.4"
-];
-async function loadTrystero() {
-  if (TS) return TS;
-  for (const url of TS_CANDIDATES) {
-    try {
-      const mod = await import(url);
-      if (mod && typeof mod.joinRoom === "function") { TS = mod; return TS; }
-    } catch (e) { /* try next strategy/CDN */ }
-  }
-  return null;
+/* ---------------- Networking (room relay server) ---------------- */
+// Every player keeps one WebSocket to their room on a small relay server (worker/ in this
+// repo, deployed to Cloudflare). The server tracks who's present and passes messages between
+// players; all game logic — and the merge rules that keep everyone converged after a
+// reconnect — stays here in the page.
+const LOCAL_DEV = location.hostname === "localhost" || location.hostname === "127.0.0.1";
+const SERVER_URL = LOCAL_DEV
+  ? "http://" + location.hostname + ":8787"
+  : "https://letter-round.zacharax.workers.dev";
+const TURNSTILE_SITE_KEY = LOCAL_DEV
+  ? "1x00000000000000000000AA"                          // Cloudflare's always-pass test key
+  : "0x4AAAAAAGT6LM9X3bk16Zno";
+
+const PING_MS = 25000;      // keepalive; answered by Cloudflare's edge without waking the room
+const PONG_WAIT_MS = 10000; // no pong by then = the socket is dead, even if the browser hasn't noticed
+const OPEN_WAIT_MS = 10000; // give up on a connection attempt that never gets welcomed
+const OFFLINE_AFTER = 3;    // failed first attempts before offering solo play
+const CLOSE = { REPLACED: 4001, FULL: 4003, BAD_REQUEST: 4400, AUTH: 4401 };
+
+let netStatus = "idle";     // connecting | verifying | online | reconnecting | offline | replaced | full | badroom
+let netDetail = "";         // why the last attempt failed, for the status line
+
+function setNetStatus(s, detail) {
+  netStatus = s;
+  netDetail = detail || "";
+  netReady = s === "online";
+  // "offline" states are the ones where we've given up on (or been refused) a live room, so
+  // the device falls back to hosting itself. "replaced" deliberately isn't one: that tab is
+  // stale and shouldn't start rounds of its own.
+  netOffline = s === "offline" || s === "full" || s === "badroom";
+  onNetStatus();
 }
 
-// Optional TURN relay for networks where direct P2P can't connect at all — strict symmetric
-// NAT or client-isolated public wifi, which STUN alone never gets through. Nothing is baked
-// into this file: each device pastes its own credentials (e.g. a free Metered account) into
-// the "Advanced" box on the home page, kept only in that browser's localStorage. Only one
-// side of a given connection needs this configured for that pairwise link to have a shot at
-// relaying — the other side just needs ordinary outbound internet access to reach it.
-let turnConfig = [];
-function parseTurnPaste(text) {
-  if (!text || !text.trim()) return [];
-  let s = text;
-  const m = s.match(/iceServers\s*:\s*(\[[\s\S]*\])/); // pull the array out of a full snippet
-  if (m) {
-    s = m[1];
-  } else {
-    const start = s.indexOf("["), end = s.lastIndexOf("]");
-    if (start === -1 || end === -1 || end <= start) return [];
-    s = s.slice(start, end + 1);
+/* Turnstile: proves there's a browser here before the server hands out a session ticket.
+   Usually invisible — the widget only appears if Cloudflare wants an interaction. */
+let turnstileLoading = null;
+function loadTurnstile() {
+  if (window.turnstile) return Promise.resolve(window.turnstile);
+  if (!turnstileLoading) {
+    turnstileLoading = new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+      s.async = true;
+      s.onload = () => (window.turnstile ? resolve(window.turnstile) : reject(new Error("verification unavailable")));
+      s.onerror = () => { turnstileLoading = null; s.remove(); reject(new Error("couldn't load verification")); };
+      document.head.appendChild(s);
+    });
   }
-  s = s
-    .replace(/,\s*([\]}])/g, "$1")              // trailing commas
-    .replace(/([{,]\s*)(\w+)\s*:/g, '$1"$2":');  // unquoted keys -> valid JSON
-  try {
-    const arr = JSON.parse(s);
-    return Array.isArray(arr) ? arr.filter(e => e && e.urls) : [];
-  } catch { return []; }
+  return turnstileLoading;
+}
+async function turnstileToken() {
+  const ts = await loadTurnstile();
+  return new Promise((resolve, reject) => {
+    const box = $("turnstileBox");
+    const holder = document.createElement("div");
+    box.appendChild(holder);
+    let id = null, settled = false;
+    const finish = (fn, v) => {
+      if (settled) return;
+      settled = true;
+      setTimeout(() => { try { if (id != null) ts.remove(id); } catch {} holder.remove(); box.classList.remove("show"); }, 0);
+      fn(v);
+    };
+    try {
+      id = ts.render(holder, {
+        sitekey: TURNSTILE_SITE_KEY,
+        appearance: "interaction-only",
+        callback: (token) => finish(resolve, token),
+        "before-interactive-callback": () => box.classList.add("show"),
+        "error-callback": () => { finish(reject, new Error("verification failed")); return true; },
+        "timeout-callback": () => finish(reject, new Error("verification timed out")),
+        "unsupported-callback": () => finish(reject, new Error("browser not supported by verification"))
+      });
+    } catch (e) { finish(reject, new Error("verification failed")); }
+  });
+}
+
+// A ticket is the server's signed "this browser passed Turnstile" (valid ~12h), so
+// reconnects — screen locks, flaky wifi — don't each need a fresh challenge.
+let ticketInFlight = null;
+function getTicket(forceFresh) {
+  const cached = store.ticket();
+  if (!forceFresh && cached && cached.exp * 1000 > Date.now() + 5 * 60000) return Promise.resolve(cached.ticket);
+  if (!ticketInFlight) {
+    ticketInFlight = (async () => {
+      const token = await turnstileToken();
+      let r;
+      // text/plain body keeps this a "simple" CORS request, so there's no preflight round-trip
+      try { r = await fetch(SERVER_URL + "/session", { method: "POST", body: token }); }
+      catch { throw new Error("can't reach the game server"); }
+      if (!r.ok) throw new Error(r.status === 403 ? "verification was rejected" : "game server error (" + r.status + ")");
+      const j = await r.json();
+      store.saveTicket(j);
+      return j.ticket;
+    })().finally(() => { ticketInFlight = null; });
+  }
+  return ticketInFlight;
 }
 
 function teardownNet() {
-  try { if (net && net.room && net.room.leave) net.room.leave(); } catch {}
-  net = null; netReady = false;
+  const n = net;
+  net = null;
+  netReady = false;
+  netStatus = "idle"; netDetail = "";
+  if (!n) return;
+  n.stopped = true;
+  clearTimeout(n.retryTimer); clearTimeout(n.openTimer); stopPing(n);
+  dropSocket(n, 1000);
 }
 
-async function joinRoomNet(roomId) {
-  const mod = await loadTrystero();
-  if (state.room !== roomId) return;              // navigated away while importing
-  if (!mod) { netOffline = true; onNetStatus(); return; }
-  mySelfId = mod.selfId || "self";
-  let room;
-  try {
-    // Only include turnConfig when it's actually non-empty — passing an empty array could
-    // replace Trystero's default STUN servers instead of adding nothing, which would break
-    // ordinary direct connections too, not just the TURN fallback.
-    const roomConfig = { appId: "the-letter-round-v1", password: roomId };
-    if (turnConfig.length) {
-      // Once TURN is configured, commit to it rather than letting ICE race it against
-      // direct/STUN — that race is exactly what was causing connections to flap between
-      // "direct" and "relay" instead of settling on one persistent path. STUN entries are
-      // pointless under a relay-only policy (no host/srflx candidates are even gathered),
-      // so this intentionally doesn't inherit Trystero's default STUN servers.
-      roomConfig.rtcConfig = { iceServers: turnConfig, iceTransportPolicy: "relay" };
-    }
-    room = mod.joinRoom(roomConfig, roomId);
-  } catch (e) { netOffline = true; onNetStatus(); return; }
-
-  // Trystero 0.25 API: makeAction returns an object; send targets a peer via { target }.
-  const helloAct = room.makeAction("hello");
-  const stateAct = room.makeAction("state");
-  const ansAct = room.makeAction("ans");
-  const scoreAct = room.makeAction("score");
-  const finishAct = room.makeAction("finish");
-  const resetAct = room.makeAction("reset");
-  const endAct = room.makeAction("endnow");
-  const syncAct = room.makeAction("sync");
-  const reactAct = room.makeAction("react");
-  const mkSend = (act) => (payload, target) => act.send(payload, target ? { target } : undefined);
-  net = {
-    room,
-    sendHello: mkSend(helloAct), sendState: mkSend(stateAct), sendAns: mkSend(ansAct),
-    sendScore: mkSend(scoreAct), sendFinish: mkSend(finishAct), sendReset: mkSend(resetAct),
-    sendEndNow: mkSend(endAct), sendSync: mkSend(syncAct), sendReact: mkSend(reactAct)
+function joinRoomNet(roomId) {
+  teardownNet();
+  const n = {
+    roomId, ws: null, stopped: false, connecting: false, attempts: 0, everConnected: false,
+    freshTicket: false, retryTimer: null, openTimer: null, pingTimer: null, pongTimer: null
   };
+  const mk = (t) => (payload, to) => netSend(n, t, payload, to);
+  Object.assign(n, {
+    sendHello: mk("hello"), sendState: mk("state"), sendAns: mk("ans"), sendScore: mk("score"),
+    sendFinish: mk("finish"), sendReset: mk("reset"), sendEndNow: mk("endnow"), sendSync: mk("sync"),
+    sendReact: mk("react")
+  });
+  net = n;
+  setNetStatus("connecting");
+  connectNet(n);
+}
 
+function netSend(n, t, d, to) {
+  if (n !== net || netStatus !== "online" || !n.ws || n.ws.readyState !== WebSocket.OPEN) return false;
+  try { n.ws.send(JSON.stringify(to ? { t, d, to } : { t, d })); return true; } catch { return false; }
+}
+
+async function connectNet(n) {
+  if (n !== net || n.stopped || n.connecting || n.ws) return;
+  if (SERVER_URL.includes("REPLACE_ME") || TURNSTILE_SITE_KEY.includes("REPLACE_ME")) {
+    setNetStatus("offline", "game server not configured");
+    return;
+  }
+  n.connecting = true;
+  clearTimeout(n.retryTimer);
+  let ticket;
+  try {
+    const cached = store.ticket();
+    if (n.freshTicket || !cached || cached.exp * 1000 <= Date.now() + 5 * 60000) {
+      if (!n.everConnected) setNetStatus("verifying");
+    }
+    ticket = await getTicket(n.freshTicket);
+    n.freshTicket = false;
+  } catch (e) {
+    n.connecting = false;
+    if (n === net) scheduleRetry(n, e.message);
+    return;
+  }
+  n.connecting = false;
+  if (n !== net || n.stopped) return;
+
+  const url = SERVER_URL.replace(/^http/, "ws") + "/room/" + n.roomId +
+    "?pid=" + encodeURIComponent(myPid) + "&ticket=" + encodeURIComponent(ticket);
+  let ws;
+  try { ws = new WebSocket(url); } catch { scheduleRetry(n, "can't reach the game server"); return; }
+  n.ws = ws;
+  n.openTimer = setTimeout(() => { if (n.ws === ws) socketGone(n, ws, 1006); }, OPEN_WAIT_MS);
+  ws.onmessage = (ev) => { if (n === net && n.ws === ws) onSocketMessage(n, ev.data); };
+  ws.onclose = (ev) => socketGone(n, ws, ev.code);
+}
+
+// Stop listening to a socket and close it. Used both for a deliberate leave and for a socket
+// we've decided is dead — a half-open connection can take minutes to fire `close` by itself.
+function dropSocket(n, code) {
+  const ws = n.ws;
+  if (!ws) return;
+  n.ws = null;
+  ws.onclose = null; ws.onmessage = null;
+  try { ws.close(code === 1000 ? 1000 : 4000); } catch {}
+}
+
+function socketGone(n, ws, code) {
+  if (n !== net || n.ws !== ws) return;
+  clearTimeout(n.openTimer); stopPing(n);
+  dropSocket(n, code);
+  if (code === CLOSE.REPLACED) { setNetStatus("replaced"); return; }
+  if (code === CLOSE.FULL) { setNetStatus("full"); return; }
+  if (code === CLOSE.BAD_REQUEST) { setNetStatus("badroom"); return; }
+  if (code === CLOSE.AUTH) { store.clearTicket(); n.freshTicket = true; scheduleRetry(n, "verification expired"); return; }
+  scheduleRetry(n, n.everConnected ? "connection lost" : "can't reach the game server");
+}
+
+function scheduleRetry(n, reason) {
+  if (n !== net || n.stopped) return;
+  n.attempts++;
+  const base = Math.min(15000, 500 * Math.pow(2, Math.min(n.attempts - 1, 5)));
+  const delay = base * (0.75 + Math.random() * 0.5);
+  setNetStatus(n.everConnected ? "reconnecting" : (n.attempts >= OFFLINE_AFTER ? "offline" : "connecting"), reason);
+  clearTimeout(n.retryTimer);
+  n.retryTimer = setTimeout(() => connectNet(n), delay);
+}
+
+// Retry right now instead of waiting out the backoff — the network came back, the tab came
+// to the foreground, or the player asked. An open socket just gets a health-check ping.
+function kickNet(force) {
+  const n = net;
+  if (!n || n.stopped) return;
+  if (n.ws && n.ws.readyState === WebSocket.OPEN) { sendPing(n); return; }
+  if (n.ws || n.connecting) return;
+  if (!force && (netStatus === "replaced" || netStatus === "full" || netStatus === "badroom")) return;
+  if (force && netStatus !== "online") setNetStatus(n.everConnected ? "reconnecting" : "connecting");
+  clearTimeout(n.retryTimer);
+  connectNet(n);
+}
+
+function sendPing(n) {
+  if (!n.ws || n.ws.readyState !== WebSocket.OPEN || n.pongTimer) return;
+  const ws = n.ws;
+  try { ws.send("ping"); } catch {}
+  n.pongTimer = setTimeout(() => { n.pongTimer = null; socketGone(n, ws, 1006); }, PONG_WAIT_MS);
+}
+function startPing(n) {
+  stopPing(n);
+  n.pingTimer = setInterval(() => sendPing(n), PING_MS);
+}
+function stopPing(n) {
+  clearInterval(n.pingTimer); n.pingTimer = null;
+  clearTimeout(n.pongTimer); n.pongTimer = null;
+}
+
+function onSocketMessage(n, raw) {
+  if (raw === "pong") { clearTimeout(n.pongTimer); n.pongTimer = null; return; }
+  let m;
+  try { m = JSON.parse(raw); } catch { return; }
+  if (!m || typeof m.t !== "string") return;
+  if (m.t === "_welcome") { onWelcome(n, m); return; }
+  if (m.t === "_leave") {
+    // Only drop presence — keep their answers/scores. A dropped connection (screen lock,
+    // background tab) is usually temporary, and we don't want the review grid to blank
+    // someone out just because their connection blipped.
+    if (m.pid && roster[m.pid]) { delete roster[m.pid]; onNetStatus(); }
+    return;
+  }
+  if (m.t === "_join") return; // they announce themselves with a hello right after
+  const h = netHandlers[m.t];
+  if (h && m.from) { try { h(m.d, { peerId: m.from }); } catch (e) { console.error(e); } }
+}
+
+// The server's welcome carries everyone already in the room (with their last hello), so the
+// roster is right immediately — no waiting for re-announcements.
+function onWelcome(n, m) {
+  clearTimeout(n.openTimer);
+  n.attempts = 0;
+  n.everConnected = true;
+  roster = {};
+  (m.peers || []).forEach(p => {
+    if (!p || !p.pid || p.pid === myPid) return;
+    const i = p.info || {};
+    roster[p.pid] = { name: i.name || "Player", created: !!i.created, dur: i.dur || null, pid: p.pid };
+  });
+  setNetStatus("online");
+  startPing(n);
+  net.sendHello(helloPayload());
+  net.sendSync(syncPayload());
+  // Re-share answers on every (re)connect while reviewing: one sent while the socket was down
+  // was lost, and receivers treat a repeat as a no-op.
+  if (document.body.classList.contains("review")) {
+    broadcastAnswers();
+    updateScore();
+  }
+}
+
+// Game message handlers, keyed by message type. `meta.peerId` is the sender's player id, as
+// stamped by the server (not self-reported in the payload).
+const netHandlers = {
   // Reactions are deliberately fire-and-forget — they're a live moment, not game state, so
-  // nothing is persisted or re-synced; a peer who missed one simply didn't see it fly by.
-  reactAct.onMessage = (data, meta) => {
+  // nothing is persisted or re-synced; a player who missed one simply didn't see it fly by.
+  react(data, meta) {
     if (!data || !document.body.classList.contains("review")) return;
     if (data.round !== state.round || (data.epoch || 0) !== (state.epoch || 0)) return;
-    const fallbackName = (meta && roster[meta.peerId] && roster[meta.peerId].name) || "";
+    const fallbackName = (roster[meta.peerId] && roster[meta.peerId].name) || "";
     spawnReaction(parseInt(data.cat, 10), String(data.pid || ""), data.emoji, String(data.name || fallbackName).slice(0, 20));
-  };
-  netOffline = false; netReady = true;
-
+  },
   // Every hello (first join, or a re-announce after a reconnect) triggers a full catch-up via
   // a single consolidated `sync` payload — round state, scores, and the finish summary if
-  // applicable — gossiped from WHICHEVER peer answers, not just the host, so the room
-  // converges even if the original host is the one who dropped and lost state. This is what
-  // makes a screen-lock / refresh / mid-game rejoin self-heal without anyone re-sharing the link.
-  helloAct.onMessage = (data, meta) => {
-    const peerId = meta && meta.peerId;
-    if (!peerId) return;
-    roster[peerId] = { name: (data && data.name) || "Player", created: !!(data && data.created), dur: (data && data.dur) || null, pid: (data && data.pid) || peerId };
+  // applicable — from WHICHEVER player answers, not just the host, so the room converges even
+  // if the original host is the one who dropped and lost state.
+  hello(data, meta) {
+    const peerId = meta.peerId;
+    roster[peerId] = { name: (data && data.name) || "Player", created: !!(data && data.created), dur: (data && data.dur) || null, pid: peerId };
     onNetStatus();
-    try { net.sendSync(syncPayload(), peerId); } catch {}
-    if (myAnswersShared && document.body.classList.contains("review")) { try { net.sendAns(answerPayload(), peerId); } catch {} }
-  };
-  stateAct.onMessage = (data) => {
+    net.sendSync(syncPayload(), peerId);
+    if (myAnswersShared && document.body.classList.contains("review")) net.sendAns(answerPayload(), peerId);
+  },
+  state(data) {
     if (!data || typeof data.startAt !== "number") return;
     const epoch = typeof data.epoch === "number" ? data.epoch : 0;
     if (state.seed) {
       if (isSameRound(epoch, data.round)) {
         // Same round we already have — the only new information a resend can carry is that
-        // it ended (ending early isn't clock-driven, so a peer who missed that message, or
+        // it ended (ending early isn't clock-driven, so a player who missed that message, or
         // joined mid-round, has no other way to learn it).
         if (data.ended && !state.ended) endRound();
         return;
@@ -1745,26 +1930,22 @@ async function joinRoomNet(roomId) {
     }
     if (epoch > (state.epoch || 0)) resetToLobby(epoch); // new game generation — drop stale scores first
     applyRound(data.seed, data.startAt, data.round, data.durationMs, !!data.ended, data.customCats);
-  };
-  ansAct.onMessage = (data, meta) => {
-    const peerId = meta && meta.peerId;
-    if (!data || !peerId) return;
-    const pid = data.pid || peerId;
-    const fallbackName = (roster[peerId] && roster[peerId].name) || "Player";
+  },
+  ans(data, meta) {
+    if (!data) return;
+    const pid = meta.peerId;
+    const fallbackName = (roster[pid] && roster[pid].name) || "Player";
     peerAnswers[pid] = { name: data.name || fallbackName, answers: data.answers || {}, round: data.round };
     if (sessionScores[pid] == null || sessionScores[pid].rounds[data.round] == null) {
       recordScore(pid, data.name || fallbackName, data.round, 0); // show them on the board at 0 until they tick
     }
     if (document.body.classList.contains("review")) { renderReview(); renderScoreboard(); }
-  };
-  scoreAct.onMessage = (data, meta) => {
-    const peerId = meta && meta.peerId;
+  },
+  score(data, meta) {
     if (!data) return;
-    const pid = data.pid || peerId;
-    if (!pid) return;
-    if (recordScore(pid, data.name, data.round, data.score || 0, typeof data.ts === "number" ? data.ts : 0)) refreshScoreViews();
-  };
-  syncAct.onMessage = (data) => {
+    if (recordScore(meta.peerId, data.name, data.round, data.score || 0, typeof data.ts === "number" ? data.ts : 0)) refreshScoreViews();
+  },
+  sync(data) {
     if (!data) return;
     const epoch = typeof data.epoch === "number" ? data.epoch : 0;
     if (epoch < (state.epoch || 0)) return; // they're behind us; their scores are for a game we've moved past
@@ -1791,70 +1972,19 @@ async function joinRoomNet(roomId) {
     // Otherwise the sender is in the lobby too (no round, no summary) — if we just adopted
     // their epoch above, we're already correctly there; nothing further to do.
     mergeReviewAnswers(data.answers);
-  };
-  finishAct.onMessage = (data) => {
+  },
+  finish(data) {
     if (data && data.scores) mergeSessionScores(data.scores);
     if (state.room) store.saveSummary(state.room, true);
     showSummary();
-  };
-  resetAct.onMessage = (data) => { resetToLobby(data && typeof data.epoch === "number" ? data.epoch : undefined); };
-  endAct.onMessage = (data) => {
+  },
+  reset(data) { resetToLobby(data && typeof data.epoch === "number" ? data.epoch : undefined); },
+  endnow(data) {
     if (state.ended || state.phase === "over" || !state.seed) return;
     if (data && data.round != null && data.round !== state.round) return; // only end the current round
     endRound();
-  };
-
-  room.onPeerJoin = (peerId) => {
-    try { net.sendHello(helloPayload(), peerId); } catch {}
-    onNetStatus();
-    setTimeout(refreshConnectionTypes, 2500); // give ICE a moment to actually negotiate
-  };
-  room.onPeerLeave = (peerId) => {
-    // Only drop presence — keep their answers/scores. A dropped connection (screen lock,
-    // background tab) is usually temporary, and we don't want the review grid to blank
-    // someone out just because their peer connection blipped.
-    delete roster[peerId];
-    delete connectionTypes[peerId];
-    onNetStatus();
-  };
-
-  try { net.sendHello(helloPayload()); } catch {}
-  try { net.sendSync(syncPayload()); } catch {}
-  if (document.body.classList.contains("review") && !myAnswersShared) {
-    broadcastAnswers();
-    updateScore();
   }
-  onNetStatus();
-  setTimeout(refreshConnectionTypes, 1500);
-}
-
-// Inspects each live RTCPeerConnection's active candidate pair to tell whether it ended up
-// direct (STUN/host) or relayed through TURN — the same thing chrome://webrtc-internals
-// shows, surfaced in the roster itself so it works on every device, including phones.
-async function refreshConnectionTypes() {
-  if (!net || !net.room || typeof net.room.getPeers !== "function") return;
-  let peers;
-  try { peers = net.room.getPeers(); } catch { return; }
-  const entries = peers instanceof Map ? [...peers.entries()] : Object.entries(peers || {});
-  let changed = false;
-  await Promise.all(entries.map(async ([peerId, pc]) => {
-    if (!pc || typeof pc.getStats !== "function") return;
-    try {
-      const stats = await pc.getStats();
-      let type = null;
-      stats.forEach(s => {
-        if (s.type === "candidate-pair" && s.state === "succeeded") {
-          const local = stats.get(s.localCandidateId);
-          const remote = stats.get(s.remoteCandidateId);
-          const relay = (local && local.candidateType === "relay") || (remote && remote.candidateType === "relay");
-          type = relay ? "relay" : "direct";
-        }
-      });
-      if (type && connectionTypes[peerId] !== type) { connectionTypes[peerId] = type; changed = true; }
-    } catch {}
-  }));
-  if (changed) renderRoster();
-}
+};
 
 function helloPayload() { return { name: myName, created: !!state.created, dur: chosenDurationMs, pid: myPid }; }
 function roundPayload() {
@@ -1887,21 +2017,21 @@ function syncPayload() {
 }
 function answerPayload() { return { name: myName, answers: store.ans(state.seed), round: state.round, pid: myPid }; }
 function broadcastAnswers() {
-  if (net && !netOffline) { try { net.sendAns(answerPayload()); myAnswersShared = true; } catch {} }
+  if (net && !netOffline && net.sendAns(answerPayload())) myAnswersShared = true;
 }
 
 function hostId() {
-  const all = [{ id: mySelfId || "self", created: !!state.created }]
+  const all = [{ id: selfKey(), created: !!state.created }]
     .concat(Object.keys(roster).map(id => ({ id, created: !!roster[id].created })));
   const creators = all.filter(p => p.created).map(p => p.id).sort();
   if (creators.length) return creators[0];
-  if (Object.keys(roster).length === 0) return state.created ? (mySelfId || "self") : null; // alone: no idea who the host is yet
+  if (Object.keys(roster).length === 0) return state.created ? selfKey() : null; // alone: no idea who the host is yet
   return all.map(p => p.id).sort()[0];
 }
 function isHost() {
   if (netOffline) return true;                                  // solo / offline: you host yourself
   if (Object.keys(roster).length === 0) return !!state.created; // alone in the room: only the creator hosts
-  return hostId() === (mySelfId || "self");                     // with peers: creator wins (via hello.created), else lowest id
+  return hostId() === selfKey();                                // with peers: creator wins (via hello.created), else lowest id
 }
 
 /* ---------------- Presence / roster / name ---------------- */
@@ -1922,7 +2052,7 @@ function ensureName() {
 function renderPlayerRows(el) {
   if (!el) return;
   const host = hostId();
-  const list = [{ id: mySelfId || "self", name: myName, me: true }]
+  const list = [{ id: selfKey(), name: myName, me: true }]
     .concat(Object.keys(roster).map(id => ({ id, name: roster[id].name, me: false })));
   list.sort((a, b) => (a.id < b.id ? -1 : 1));
   el.innerHTML = "";
@@ -1936,16 +2066,6 @@ function renderPlayerRows(el) {
       const b = document.createElement("span");
       b.className = "badge"; b.textContent = "host";
       row.appendChild(b);
-    }
-    if (!p.me) {
-      const ct = connectionTypes[p.id];
-      if (ct) {
-        const c = document.createElement("span");
-        c.className = "conn " + ct;
-        c.textContent = ct;
-        c.title = ct === "relay" ? "Connected via TURN relay — direct connection was blocked" : "Connected directly, peer-to-peer";
-        row.appendChild(c);
-      }
     }
     if (p.me) {
       const m = document.createElement("span");
@@ -1987,19 +2107,61 @@ function renderLobbyControls() {
     if (hint) hint.textContent = "Waiting for the host to start the round…";
   }
 }
+const NET_LABELS = {
+  idle: "", connecting: "connecting…", verifying: "verifying…", reconnecting: "reconnecting…",
+  offline: "offline", replaced: "open in another tab", full: "room full", badroom: "invalid room"
+};
+// The longer explanation of the connection state, for the lobby note and the "who's here"
+// panel. `action` is a button label when retrying by hand makes sense.
+function netMessage() {
+  const why = netDetail ? " (" + netDetail + ")" : "";
+  switch (netStatus) {
+    case "online": return { text: "Connected to the game server." };
+    case "connecting": return { text: "Connecting to the game server…" + (netDetail ? " retrying" + why : "") };
+    case "verifying": return { text: "Checking this browser before joining…" };
+    case "reconnecting": return { text: "Lost connection — reconnecting…" + why + " Your answers are safe on this device.", action: "Retry now" };
+    case "offline": return { text: "Can't connect" + why + ". Still retrying — you can play solo meanwhile, but others won't see this game.", action: "Retry now" };
+    case "replaced": return { text: "This room is open in another tab or window.", action: "Use this tab" };
+    case "full": return { text: "This room is full (16 players max).", action: "Try again" };
+    case "badroom": return { text: "That room link isn't valid — start a new game instead." };
+    default: return { text: "" };
+  }
+}
+function renderNetMessage(el, msg) {
+  if (!el) return;
+  el.textContent = msg.text;
+  if (msg.action) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "linkbtn"; b.textContent = msg.action;
+    b.addEventListener("click", (e) => { e.stopPropagation(); kickNet(true); });
+    el.appendChild(document.createTextNode(" "));
+    el.appendChild(b);
+  }
+}
 function onNetStatus() {
   const countEl = $("playerCount");
   if (countEl) {
-    countEl.textContent = netOffline ? "· offline"
-      : (!netReady ? "· connecting…" : "· " + (Object.keys(roster).length + 1) + " here");
+    countEl.textContent = netReady
+      ? "· " + (Object.keys(roster).length + 1) + " here"
+      : (NET_LABELS[netStatus] ? "· " + NET_LABELS[netStatus] : "");
   }
   const pill = $("codepill");
   if (pill) {
-    pill.classList.toggle("online", !netOffline && netReady);
-    pill.classList.toggle("offline", netOffline);
+    const bad = netOffline || netStatus === "replaced";
+    pill.classList.toggle("online", netReady);
+    pill.classList.toggle("offline", bad);
+    pill.classList.toggle("pending", !netReady && !bad);
   }
+  const msg = netMessage();
+  renderNetMessage($("connStatus"), msg);
   const note = $("offlineNote");
-  if (note) note.hidden = !netOffline;
+  if (note) {
+    // A first connect normally takes well under a second, so don't flash a note for it —
+    // only once something has actually gone wrong.
+    const quiet = netReady || netStatus === "verifying" || (netStatus === "connecting" && !netDetail) || netStatus === "idle";
+    note.hidden = quiet;
+    if (!quiet) renderNetMessage(note, msg);
+  }
   renderRoster();
   renderLobbyControls();
 }
@@ -2017,7 +2179,7 @@ function doJoin() {
     id = raw.replace(/[^a-z0-9]/gi, "");
   }
   id = id.toLowerCase();
-  if (!id) { toast("That doesn't look like a room code"); return; }
+  if (!ROOM_CODE_RE.test(id)) { toast("Room codes are 5 letters"); return; }
   enterRoom(id, false);
 }
 $("joinBtn").addEventListener("click", doJoin);
@@ -2078,23 +2240,6 @@ $("customCatsInput").addEventListener("input", () => {
   updateCustomCatsSummary();
 });
 
-function updateTurnHint() {
-  const s = $("turnSummary");
-  if (s) s.textContent = "Advanced: TURN relay" + (turnConfig.length ? " — " + turnConfig.length + " server(s) configured" : " (optional)");
-  const h = $("turnHint");
-  if (h) {
-    h.textContent = turnConfig.length
-      ? turnConfig.length + " relay server(s) configured — this device will always connect through them"
-      : ($("turnInput").value.trim() ? "Couldn't find any valid servers in that — double-check the paste" : "Leave blank unless direct connections are failing on your network");
-  }
-}
-$("turnInput").addEventListener("input", () => {
-  const val = $("turnInput").value;
-  store.saveTurnPaste(val);
-  turnConfig = parseTurnPaste(val);
-  updateTurnHint();
-});
-
 $("brandHome").addEventListener("click", () => { location.hash = ""; showHome(); });
 
 function showHome() {
@@ -2110,7 +2255,8 @@ function showHome() {
 function route() {
   const { room, legacy } = parseHash();
   if (room) {
-    if (state.room === room && (netReady || netOffline)) return; // already here
+    if (state.room === room && net) return; // already here
+    if (!ROOM_CODE_RE.test(room)) { toast("That room link isn't valid — start a new game"); location.hash = ""; showHome(); return; }
     enterRoom(room, false);
   } else if (legacy) {
     toast("That's an old-style link — start a new game");
@@ -2128,48 +2274,20 @@ window.addEventListener("hashchange", route);
 // working even after the context gets auto-suspended by a screen lock or backgrounding.
 document.addEventListener("pointerdown", () => getCtx(), { passive: true });
 
-function reconnectNet() {
-  if (!state.room) return;
-  if (!netReady && !netOffline) return; // a join is already in flight
-  const roomId = state.room;
-  teardownNet();
-  netReady = false; netOffline = false;
-  onNetStatus();
-  joinRoomNet(roomId);
-}
+// Coming back to the foreground, network changes and back/forward-cache restores are exactly
+// when a socket has silently died. None of these force a reconnect: an open socket just gets
+// a health-check ping (a dead one fails it within seconds), and a closed one skips the rest
+// of its backoff wait.
 let hiddenSince = null;
 document.addEventListener("visibilitychange", () => {
   getCtx();
   if (document.visibilityState === "hidden") { hiddenSince = Date.now(); return; }
-  // Only force a reconnect after being away a while (a real screen lock or backgrounding) —
-  // visibilitychange also fires on an ordinary tab switch or the devtools panel stealing
-  // focus, and reconnecting on every one of those was flapping an otherwise healthy
-  // connection (and needlessly re-creating TURN allocations every time).
-  const wasHiddenAWhile = hiddenSince && (Date.now() - hiddenSince > 15000);
+  const wasHiddenAWhile = hiddenSince && (Date.now() - hiddenSince > 5000);
   hiddenSince = null;
-  if (wasHiddenAWhile && state.room) reconnectNet();
+  if (wasHiddenAWhile) kickNet();
 });
-window.addEventListener("pageshow", () => { if (state.room) reconnectNet(); });
-window.addEventListener("online", () => { if (state.room) reconnectNet(); });
-
-// Periodic re-announce (hello + a full state sync) so the room self-heals from a silently
-// dropped connection (mobile screen lock, backgrounded tab) without anyone noticing or
-// re-sharing the link — this is what keeps "the entire game state" converged continuously,
-// not just at the moment someone joins.
-setInterval(() => {
-  if (state.room && net && !netOffline) {
-    try { net.sendHello(helloPayload()); } catch {}
-    try { net.sendSync(syncPayload()); } catch {}
-  }
-}, 25000);
-
-// Keep polling each peer's actual candidate-pair type — ICE negotiation (especially with a
-// TURN round-trip) can easily take longer than the one-shot checks after joining, so a single
-// early check can permanently miss it. Runs regardless of phase, since the "who's here"
-// popover in the header is visible throughout the game, not just the lobby.
-setInterval(() => {
-  if (state.room && net && !netOffline) refreshConnectionTypes();
-}, 3000);
+window.addEventListener("pageshow", (e) => { if (e.persisted) kickNet(); });
+window.addEventListener("online", () => kickNet());
 
 $("codepill").addEventListener("click", (e) => {
   e.stopPropagation();
@@ -2185,9 +2303,7 @@ chosenDurationMs = store.dur() || DURATION_MS;
 customCategories = parseCustomCats(store.customCats());
 $("customCatsInput").value = store.customCats();
 updateCustomCatsSummary();
-turnConfig = parseTurnPaste(store.turnPaste());
-$("turnInput").value = store.turnPaste();
-updateTurnHint();
+try { localStorage.removeItem("lr.turnpaste"); } catch {} // from the old peer-to-peer TURN setting
 syncDurationSeg();
 route();
 </script>
