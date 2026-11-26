@@ -62,7 +62,10 @@ Abuse protection:
    for a signed ticket valid for 7 days. Every WebSocket connection must carry a valid ticket. Rotating
    `SESSION_SECRET` invalidates all tickets.
 3. **Strict room codes and player ids** — anything else is rejected before a Durable Object is created.
-4. **Per-room limits** — 16 players, 64 KB messages, and a per-connection message rate limit.
+4. **Rate limits** (in `wrangler.toml`) — 10 Turnstile checks a minute per IP; 30 room connections a minute
+   per ticket and 100 per IP. Requests blocked here still count toward the free plan's daily request limit;
+   only a WAF rule on a custom domain would stop them before the Worker runs.
+5. **Per-room limits** — 16 players, 64 KB messages, and a per-connection message rate limit.
 
 ### Deploying
 

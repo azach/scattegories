@@ -209,12 +209,13 @@
   .connpanel {
     position: absolute; top: calc(100% + 8px); right: 0; z-index: 40;
     background: var(--board); border: 1px solid var(--line); border-radius: 14px;
-    padding: 14px 16px; box-shadow: var(--shadow);
-    min-width: 220px; max-width: min(300px, calc(100vw - 40px));
+    padding: 16px 18px; box-shadow: var(--shadow);
+    width: min(360px, calc(100vw - 40px));
     opacity: 0; pointer-events: none; transform: translateY(-4px);
     transition: opacity .15s ease, transform .15s ease;
   }
   .connpanel .roster { margin: 0; }
+  .connpanel .player > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .codewrap:hover .connpanel, .codewrap.open .connpanel { opacity: 1; pointer-events: auto; transform: none; }
 
   /* marquee / hero board */
@@ -392,7 +393,7 @@
   .player .me { margin-left: auto; color: var(--faint); font-weight: 500; font-size: 12px; }
   .waiting { color: var(--muted); font-size: 14px; }
   .offline-note { color: var(--hot); font-size: 13px; margin-top: 10px; }
-  .connstatus { margin-top: 4px; color: var(--muted); }
+  .connstatus { margin-top: 12px; color: var(--muted); font-size: 13px; line-height: 1.45; }
   .linkbtn {
     background: none; border: 0; padding: 0; font: inherit; color: var(--ink); font-weight: 700;
     text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
@@ -1653,7 +1654,7 @@ const PING_MS = 25000;      // keepalive; answered by Cloudflare's edge without 
 const PONG_WAIT_MS = 10000; // no pong by then = the socket is dead, even if the browser hasn't noticed
 const OPEN_WAIT_MS = 10000; // give up on a connection attempt that never gets welcomed
 const OFFLINE_AFTER = 3;    // failed first attempts before offering solo play
-const CLOSE = { REPLACED: 4001, FULL: 4003, BAD_REQUEST: 4400, AUTH: 4401 };
+const CLOSE = { REPLACED: 4001, FULL: 4003, BAD_REQUEST: 4400, AUTH: 4401, RATE: 4429 };
 
 let netStatus = "idle";     // connecting | verifying | online | reconnecting | offline | replaced | full | badroom
 let netDetail = "";         // why the last attempt failed, for the status line
@@ -1726,7 +1727,8 @@ function getTicket(forceFresh) {
       // text/plain body keeps this a "simple" CORS request, so there's no preflight round-trip
       try { r = await fetch(SERVER_URL + "/session", { method: "POST", body: token }); }
       catch { throw new Error("can't reach the game server"); }
-      if (!r.ok) throw new Error(r.status === 403 ? "verification was rejected" : "game server error (" + r.status + ")");
+      if (!r.ok) throw new Error(r.status === 403 ? "verification was rejected"
+        : r.status === 429 ? "too many attempts, waiting" : "game server error (" + r.status + ")");
       const j = await r.json();
       store.saveTicket(j);
       return j.ticket;
@@ -1820,6 +1822,7 @@ function socketGone(n, ws, code) {
   if (code === CLOSE.FULL) { setNetStatus("full"); return; }
   if (code === CLOSE.BAD_REQUEST) { setNetStatus("badroom"); return; }
   if (code === CLOSE.AUTH) { store.clearTicket(); n.freshTicket = true; scheduleRetry(n, "verification expired"); return; }
+  if (code === CLOSE.RATE) { scheduleRetry(n, "too many attempts, waiting"); return; }
   scheduleRetry(n, n.everConnected ? "connection lost" : "can't reach the game server");
 }
 

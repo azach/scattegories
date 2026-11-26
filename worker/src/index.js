@@ -11,7 +11,8 @@
 //      and every WebSocket upgrade must carry a valid ticket. Scripts can't get one without
 //      passing a challenge.
 //   3. Strict room codes / player ids — junk URLs never instantiate a Durable Object.
-//   4. Per-room caps inside the object — player count, message size, message rate.
+//   4. Rate limits — Turnstile checks per IP, room connections per ticket and per IP.
+//   5. Per-room caps inside the object — player count, message size, message rate.
 
 import { DurableObject } from "cloudflare:workers";
 
@@ -32,6 +33,7 @@ const CLOSE_FULL = 4003;
 const CLOSE_STALE = 4008;
 const CLOSE_BAD_REQUEST = 4400;
 const CLOSE_AUTH = 4401;     // missing/expired ticket — client should re-verify and retry
+const CLOSE_RATE = 4429;     // too many connection attempts — client backs off
 
 /* ---------------- Worker entry ---------------- */
 export default {
@@ -44,6 +46,7 @@ export default {
       if (!originOk) return new Response("forbidden", { status: 403 });
       if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
       if (request.method !== "POST") return new Response("method not allowed", { status: 405, headers: corsHeaders(origin) });
+      if (!(await underLimit(env.SESSION_LIMIT, clientIp(request)))) return json({ error: "too many attempts" }, 429, origin);
       return handleSession(request, env, origin);
     }
 
@@ -59,7 +62,11 @@ export default {
       // browsers hide the HTTP status of a failed upgrade, so a close code is the only way
       // the client can tell "re-verify" from "bad link" from "server unreachable".
       if (!ROOM_RE.test(room) || !PID_RE.test(pid)) return closedSocket(CLOSE_BAD_REQUEST, "bad room or player id");
-      if (!(await verifyTicket(env, url.searchParams.get("ticket") || ""))) return closedSocket(CLOSE_AUTH, "verification required");
+      if (!(await underLimit(env.IP_LIMIT, clientIp(request)))) return closedSocket(CLOSE_RATE, "too many attempts");
+      const ticket = url.searchParams.get("ticket") || "";
+      if (!(await verifyTicket(env, ticket))) return closedSocket(CLOSE_AUTH, "verification required");
+      // Keyed on the verified ticket, so one Turnstile pass can't be used to open rooms en masse.
+      if (!(await underLimit(env.TICKET_LIMIT, ticket))) return closedSocket(CLOSE_RATE, "too many attempts");
       const stub = env.ROOMS.get(env.ROOMS.idFromName(room));
       return stub.fetch(request);
     }
@@ -67,6 +74,16 @@ export default {
     return new Response("not found", { status: 404 });
   }
 };
+
+function clientIp(request) {
+  return request.headers.get("CF-Connecting-IP") || "unknown";
+}
+
+// Fails open: a missing binding or a limiter hiccup shouldn't take the game down.
+async function underLimit(limiter, key) {
+  if (!limiter) return true;
+  try { return (await limiter.limit({ key })).success; } catch { return true; }
+}
 
 function allowedOrigins(env) {
   return String(env.ALLOWED_ORIGINS || "").split(",").map(s => s.trim()).filter(Boolean);
@@ -124,8 +141,11 @@ async function handleSession(request, env, origin) {
     return json({ error: "verification failed", codes }, 403, origin);
   }
 
+  // Ticket = "<expiry>.<nonce>.<signature>". The nonce makes every ticket unique — without it,
+  // two players verifying in the same second would share one ticket and its rate limit.
   const exp = Math.floor(Date.now() / 1000) + TICKET_TTL_S;
-  const ticket = exp + "." + b64url(await hmac(env.SESSION_SECRET, String(exp)));
+  const body = exp + "." + b64url(crypto.getRandomValues(new Uint8Array(12)));
+  const ticket = body + "." + b64url(await hmac(env.SESSION_SECRET, body));
   return json({ ticket, exp }, 200, origin);
 }
 
@@ -137,15 +157,12 @@ async function hmac(secret, data) {
 }
 async function verifyTicket(env, ticket) {
   if (!env.SESSION_SECRET) return false;
-  const dot = ticket.indexOf(".");
-  if (dot < 1) return false;
-  const expStr = ticket.slice(0, dot);
-  const exp = parseInt(expStr, 10);
-  if (!/^\d+$/.test(expStr) || exp < Date.now() / 1000) return false;
+  const m = ticket.match(/^(\d+)\.([A-Za-z0-9_-]{16})\.([A-Za-z0-9_-]+)$/);
+  if (!m || parseInt(m[1], 10) < Date.now() / 1000) return false;
   let sig;
-  try { sig = unb64url(ticket.slice(dot + 1)); } catch { return false; }
+  try { sig = unb64url(m[3]); } catch { return false; }
   // subtle.verify compares in constant time.
-  return crypto.subtle.verify("HMAC", await hmacKey(env.SESSION_SECRET), sig, new TextEncoder().encode(expStr));
+  return crypto.subtle.verify("HMAC", await hmacKey(env.SESSION_SECRET), sig, new TextEncoder().encode(m[1] + "." + m[2]));
 }
 function b64url(buf) {
   return btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
