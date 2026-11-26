@@ -32,3 +32,8 @@ simple = { limit = 30, period = 60 }
 name = "IP_LIMIT"        # room connections, per IP (a household can share one)
 namespace_id = "1003"
 simple = { limit = 100, period = 60 }
+
+[[ratelimits]]
+name = "MSG_LIMIT"       # relayed messages, per ticket across all its sockets and rooms
+namespace_id = "1004"
+simple = { limit = 400, period = 60 }

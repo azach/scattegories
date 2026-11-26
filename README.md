@@ -44,8 +44,10 @@ has given up or been refused. Click the pill for who's here and a plain-language
 - **Reconnecting** — the connection dropped; it retries with backoff and catches up automatically.
   A keepalive ping every 25s detects dead connections within ~10s, and coming back to the tab checks
   immediately.
-- **Offline** — the server couldn't be reached at all; you can play solo while it keeps retrying.
-- **Open in another tab** — the same player joined from another tab; **Use this tab** takes it back.
+- **Offline** — the server couldn't be reached; it keeps retrying, and rounds can't start until it connects.
+- **Paused** — a tab left in the background for 10 minutes disconnects, and reconnects when you return to it.
+- **Open in another tab** — the same player joined from another tab. The old tab is blocked until
+  **Use this tab** reloads it and takes the room back.
 - **Room full** — rooms hold up to 16 players.
 
 ## The relay server (`worker/`)
@@ -61,11 +63,19 @@ Abuse protection:
    (usually invisible; if Cloudflare wants a click, a dialog asks for it) and exchanges it at `POST /session`
    for a signed ticket valid for 7 days. Every WebSocket connection must carry a valid ticket. Rotating
    `SESSION_SECRET` invalidates all tickets.
-3. **Strict room codes and player ids** — anything else is rejected before a Durable Object is created.
-4. **Rate limits** (in `wrangler.toml`) — 10 Turnstile checks a minute per IP; 30 room connections a minute
-   per ticket and 100 per IP. Requests blocked here still count toward the free plan's daily request limit;
-   only a WAF rule on a custom domain would stop them before the Worker runs.
-5. **Per-room limits** — 16 players, 64 KB messages, and a per-connection message rate limit.
+3. **Strict room codes** — anything else is rejected before a Durable Object is created.
+4. **Player ids the client can't choose** — each browser keeps a random secret per room, and the server
+   derives the player id from it, so nobody can connect as someone else.
+5. **Rate limits** (in `wrangler.toml`) — 10 Turnstile checks a minute per IP; 30 room connections a minute
+   per ticket and 100 per IP; 400 relayed messages a minute per ticket. Requests blocked here still count
+   toward the free plan's daily request limit; only a WAF rule on a custom domain would stop them before the
+   Worker runs.
+6. **Per-room limits** — 16 players, 2 sockets per ticket, 64 KB messages, and a per-connection message
+   rate limit.
+
+Players in a room can still do what the game allows any player to do — a host can start rounds, and
+anyone with the link can join. The page treats everything other players send as untrusted: it's validated
+and only ever rendered as text.
 
 ### Deploying
 
@@ -98,6 +108,19 @@ python3 -m http.server 8000                                                 # fr
 Open `http://localhost:8000/`. On `localhost` the page automatically uses the local Worker and Cloudflare's
 always-pass Turnstile test key. Use separate browser profiles (or a private window) to be more than one
 player — tabs in the same profile share a player id, so a second tab replaces the first.
+
+### Tests
+
+With both of the above running:
+
+```sh
+cd tests && npm install
+npm run protocol   # the relay server, driven with raw WebSockets
+npm run e2e        # real Chrome pages playing a game (uses your installed Chrome)
+```
+
+The e2e run restarts the local Worker partway through to test reconnecting. Running the suites back to back
+within a minute can trip the local rate limits; wait a minute between runs.
 
 ## Hosting on GitHub Pages
 

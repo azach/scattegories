@@ -2,7 +2,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%23F5B417'/><text x='32' y='48' font-family='Georgia,serif' font-size='46' font-weight='700' text-anchor='middle' fill='%23241B04'>L</text></svg>">
 <title>The Letter Round</title>
-<meta name="description" content="A serverless Scattergories party game — one shared link, twelve categories, one letter, three minutes.">
+<meta name="description" content="A Scattergories-style party game — one shared link, twelve categories, one letter, three minutes.">
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@500;600;700;800&family=Hanken+Grotesk:ital,wght@0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@500;700&display=swap');
 
@@ -401,7 +401,8 @@
   /* Turnstile normally runs invisibly. If Cloudflare wants a click, this becomes a dialog over
      a dimmed page — missing it means never connecting, so it mustn't be subtle. */
   .turnstile-box { position: fixed; left: 0; top: 0; z-index: 1000; pointer-events: none; }
-  .turnstile-box .tstitle, .turnstile-box .tslabel { display: none; }
+  .turnstile-box .tstitle, .turnstile-box .tslabel, .turnstile-box .tsleave { display: none; }
+  .turnstile-box.show .tsleave { display: inline-flex; margin-top: 6px; }
   .turnstile-box.show {
     right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; padding: 20px;
     background: rgba(20, 14, 4, .55); pointer-events: auto;
@@ -411,6 +412,17 @@
     max-width: 380px; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,.35);
     display: flex; flex-direction: column; align-items: center; gap: 10px;
   }
+  .blocker:not([hidden]) {
+    position: fixed; inset: 0; z-index: 1001; display: flex; align-items: center; justify-content: center;
+    padding: 20px; background: rgba(20, 14, 4, .55);
+  }
+  .blocker .tscard {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 24px;
+    max-width: 380px; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,.35);
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+  }
+  .blocker .tstitle { font-size: 20px; font-weight: 700; color: var(--ink); }
+  .blocker .tslabel { font-size: 14px; color: var(--muted); margin-bottom: 6px; }
   .turnstile-box.show .tstitle { display: block; font-size: 20px; font-weight: 700; color: var(--ink); }
   .turnstile-box.show .tslabel { display: block; font-size: 14px; color: var(--muted); margin-bottom: 6px; }
 
@@ -633,11 +645,19 @@
 
 <div class="flash" aria-hidden="true"></div>
 <div class="toast" id="toast"></div>
-<div class="turnstile-box" id="turnstileBox" role="dialog" aria-modal="true" aria-labelledby="tsTitle">
+<div class="blocker" id="blocker" role="dialog" aria-modal="true" aria-labelledby="blockerTitle" hidden>
+  <div class="tscard">
+    <div class="tstitle" id="blockerTitle"></div>
+    <div class="tslabel" id="blockerText"></div>
+    <button class="btn primary" id="blockerBtn" type="button" onclick="netAction()"></button>
+  </div>
+</div>
+<div class="turnstile-box" id="turnstileBox" aria-labelledby="tsTitle">
   <div class="tscard">
     <div class="tstitle" id="tsTitle">One quick check</div>
     <div class="tslabel">Cloudflare needs to confirm you're a person before you can join the room.</div>
     <div id="turnstileSlot"></div>
+    <button class="btn ghost tsleave" id="tsLeave" type="button">Leave room</button>
   </div>
 </div>
 
@@ -765,6 +785,10 @@ function roomLink(roomId) {
 }
 
 /* ---------------- Persistence ---------------- */
+const pageSecrets = {};
+function randomToken() {
+  return btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16)))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
 const store = {
   ans(seed) { try { return JSON.parse(localStorage.getItem("lr.ans." + seed) || "{}"); } catch { return {}; } },
   saveAns(seed, obj) { try { localStorage.setItem("lr.ans." + seed, JSON.stringify(obj)); } catch {} },
@@ -783,8 +807,15 @@ const store = {
   saveTicket(v) { try { localStorage.setItem("lr.ticket", JSON.stringify({ ticket: v.ticket, exp: v.exp })); } catch {} },
   clearTicket() { try { localStorage.removeItem("lr.ticket"); } catch {} },
   // per-room persistence, so a refresh/reconnect can restore this device's view of the room
-  pid(room) { try { return localStorage.getItem("lr.pid." + room); } catch { return null; } },
-  savePid(room, v) { try { localStorage.setItem("lr.pid." + room, v); } catch {} },
+  // Per-room secret the server derives our player id from (see derivePid). Without storage,
+  // a page-lifetime secret still works — the player just gets a new id on reload.
+  secret(room) {
+    try {
+      let v = localStorage.getItem("lr.secret." + room);
+      if (!v) { v = randomToken(); localStorage.setItem("lr.secret." + room, v); }
+      return v;
+    } catch { return (pageSecrets[room] = pageSecrets[room] || randomToken()); }
+  },
   created(room) { try { return localStorage.getItem("lr.created." + room) === "1"; } catch { return false; } },
   saveCreated(room) { try { localStorage.setItem("lr.created." + room, "1"); } catch {} },
   sessionScores(room) { try { return JSON.parse(localStorage.getItem("lr.scores." + room) || "{}"); } catch { return {}; } },
@@ -832,7 +863,7 @@ let sessionScores = {};            // peerId -> { name, rounds: { roundNum: scor
 /* ---------------- Networking state ---------------- */
 let net = null;           // current room connection: socket, retry state, send helpers
 let netReady = false;     // connected and welcomed into the room
-let netOffline = false;   // gave up on (or was refused) a live room — solo fallback
+let netOffline = false;   // can't connect, or was refused (full / bad link)
 let myPid = null;         // stable per-room player id, persisted across reloads; the server keys presence on it
 let roster = {};          // pid -> { name, created, dur, pid } for everyone else in the room
 let peerAnswers = {};     // pid -> { name, answers, round }
@@ -876,10 +907,13 @@ function renderSheet() {
   state.cats.forEach((cat, i) => {
     const item = document.createElement("div");
     item.className = "item" + (scores[i] ? " scored" : "");
-    item.innerHTML =
-      '<div class="num">' + (i + 1) + '</div>' +
-      '<div><div class="cat">' + cat + '</div></div>';
-    const col = item.lastElementChild;
+    const num = document.createElement("div");
+    num.className = "num"; num.textContent = i + 1;
+    const col = document.createElement("div");
+    const catEl = document.createElement("div");
+    catEl.className = "cat"; catEl.textContent = cat;
+    col.appendChild(catEl);
+    item.appendChild(num); item.appendChild(col);
 
     const input = document.createElement("input");
     input.className = "ans";
@@ -887,6 +921,15 @@ function renderSheet() {
     input.id = "ans" + i;
     input.autocomplete = "off";
     input.spellcheck = false;
+    input.maxLength = MAX_ANSWER; // what peers accept; a huge paste would also blow the message limit
+    input.enterKeyHint = i < state.cats.length - 1 ? "next" : "done";
+    input.setAttribute("aria-label", cat);
+    input.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      const next = $("ans" + (i + 1));
+      if (next) next.focus(); else input.blur();
+    });
     input.value = answers[i] || "";
     input.placeholder = state.revealed ? state.letter + "…" : "";
     input.addEventListener("input", () => {
@@ -910,6 +953,37 @@ function renderSheet() {
   });
 }
 
+/* ---------------- Peer-data hygiene ---------------- */
+// Anything from another player — or from localStorage, which their data gets saved into — is
+// coerced to the shape the game expects before use, and is only ever rendered via textContent.
+const PID_RE = /^p[a-z0-9]{4,16}$/; // the shape the server gives player ids
+const MAX_ANSWER = 60, MAX_NAME = 20;
+const MAX_FUTURE_MS = 24 * 3600 * 1000; // a score timestamp further ahead than this is bogus
+function cleanName(v) { return typeof v === "string" ? v.trim().slice(0, MAX_NAME) : ""; }
+function cleanScore(v) { return Number.isInteger(v) && v >= 0 && v <= CATS_PER_GAME ? v : null; }
+function cleanRoundNum(v) { const n = Number(v); return Number.isInteger(n) && n >= 0 && n < 100000 ? n : null; }
+function cleanAnswers(v) {
+  const out = {};
+  if (!v || typeof v !== "object") return out;
+  for (let i = 0; i < CATS_PER_GAME; i++) if (typeof v[i] === "string" && v[i]) out[i] = v[i].slice(0, MAX_ANSWER);
+  return out;
+}
+function cleanCustomCats(v) {
+  return Array.isArray(v) ? parseCustomCats(v.filter(c => typeof c === "string").join("\n")) : [];
+}
+// A round as broadcast by the host (`state`, the `round` in `sync`, or our own saved copy).
+function cleanRound(r) {
+  if (!r || typeof r !== "object") return null;
+  const round = cleanRoundNum(r.round);
+  if (typeof r.seed !== "string" || !/^[a-z0-9]{1,16}$/.test(r.seed) || !Number.isFinite(r.startAt) || !round) return null;
+  const dur = Number(r.durationMs);
+  return {
+    seed: r.seed, startAt: r.startAt, round, ended: !!r.ended, customCats: cleanCustomCats(r.customCats),
+    durationMs: Number.isFinite(dur) && dur >= 30000 && dur <= 600000 ? dur : DURATION_MS
+  };
+}
+function cleanEpoch(v) { return Number.isInteger(v) && v >= -1 && v < 1e6 ? v : 0; }
+
 function selfKey() { return myPid || "self"; }
 
 // Scores are mutable (players tick and untick), so each round's score carries a timestamp
@@ -917,10 +991,14 @@ function selfKey() { return myPid || "self"; }
 // timestamps from the same owner's clock is enough to tell newer from stale — no cross-device
 // clock sync needed. Placeholders use ts 0 so any real value beats them.
 function recordScore(id, name, round, score, ts) {
-  if (round == null) return false;
+  round = cleanRoundNum(round);
+  score = cleanScore(score);
+  if (round == null || score == null || !PID_RE.test(id)) return false;
+  const t = Number.isFinite(ts) ? ts : 0;
+  if (t > Date.now() + MAX_FUTURE_MS) return false; // would otherwise beat the owner's real updates forever
+  name = cleanName(name);
   const entry = sessionScores[id] || { name: name || "Player", rounds: {} };
   if (!entry.ts) entry.ts = {};
-  const t = typeof ts === "number" ? ts : 0;
   if (name) entry.name = name;
   sessionScores[id] = entry;
   if (entry.rounds[round] != null && (entry.ts[round] || 0) > t) return false; // stale
@@ -928,6 +1006,17 @@ function recordScore(id, name, round, score, ts) {
   entry.ts[round] = t;
   if (state.room) store.saveSessionScores(state.room, sessionScores);
   return true;
+}
+
+// Our own saved table, rebuilt through recordScore so anything malformed (or planted by a peer
+// before validation existed) is dropped. Unlike a gossip merge, this includes our own entry.
+function mergeSavedScores(saved) {
+  if (!saved || typeof saved !== "object") return;
+  Object.keys(saved).forEach(id => {
+    const r = saved[id];
+    if (!r || !r.rounds || typeof r.rounds !== "object") return;
+    Object.keys(r.rounds).forEach(rd => recordScore(id, r.name, rd, r.rounds[rd], (r.ts && r.ts[rd]) || 0));
+  });
 }
 
 function cumulativeOf(id) {
@@ -941,12 +1030,13 @@ function cumulativeOf(id) {
 function mergeSessionScores(remote) {
   if (!remote) return;
   let changed = false;
+  if (typeof remote !== "object") return;
   Object.keys(remote).forEach(id => {
-    if (id === selfKey()) return;
+    if (id === selfKey() || !PID_RE.test(id)) return;
     const r = remote[id];
-    if (!r) return;
-    const rts = r.ts || {};
-    Object.keys(r.rounds || {}).forEach(rd => {
+    if (!r || typeof r.rounds !== "object" || !r.rounds) return;
+    const rts = (r.ts && typeof r.ts === "object") ? r.ts : {};
+    Object.keys(r.rounds).forEach(rd => {
       if (recordScore(id, r.name, rd, r.rounds[rd], rts[rd] || 0)) changed = true;
     });
   });
@@ -963,11 +1053,12 @@ function refreshScoreViews() {
 function mergeReviewAnswers(remote) {
   if (!remote || !document.body.classList.contains("review")) return;
   let changed = false;
+  if (typeof remote !== "object") return;
   Object.keys(remote).forEach(pid => {
-    if (pid === myPid || peerAnswers[pid]) return;
+    if (pid === myPid || !PID_RE.test(pid) || peerAnswers[pid]) return;
     const r = remote[pid];
     if (!r) return;
-    peerAnswers[pid] = { name: r.name || "Player", answers: r.answers || {}, round: state.round };
+    peerAnswers[pid] = { name: cleanName(r.name) || "Player", answers: cleanAnswers(r.answers), round: state.round };
     changed = true;
   });
   if (changed) { renderReview(); renderScoreboard(); }
@@ -980,7 +1071,7 @@ function updateScore() {
   const ts = Date.now();
   recordScore(selfKey(), myName, state.round, myRound, ts);
   if (document.body.classList.contains("review")) {
-    if (net && !netOffline) { try { net.sendScore({ round: state.round, score: myRound, name: myName, pid: myPid, ts }); } catch {} }
+    if (net && !netOffline) { try { net.sendScore({ score: myRound, name: myName, ts, epoch: state.epoch || 0, seed: state.seed }); } catch {} }
     renderScoreboard();
   }
 }
@@ -1005,7 +1096,10 @@ function renderScoreboard() {
     nm.className = "nm"; nm.textContent = r.name + (r.me ? " (you)" : "");
     const tot = document.createElement("span");
     tot.className = "tot";
-    tot.innerHTML = "<b>" + r.total + "</b><span class='delta'>+" + r.thisRound + " this round</span>";
+    const b = document.createElement("b"); b.textContent = r.total;
+    const delta = document.createElement("span");
+    delta.className = "delta"; delta.textContent = "+" + r.thisRound + " this round";
+    tot.appendChild(b); tot.appendChild(delta);
     line.appendChild(nm); line.appendChild(tot);
     el.appendChild(line);
   });
@@ -1033,9 +1127,27 @@ function showLetter(animate) {
   if (animate) { tileEl.classList.remove("animate"); void tileEl.offsetWidth; tileEl.classList.add("animate"); }
 }
 
+// Keeps a phone's screen on while the clock runs: an auto-lock mid-round would also drop its
+// connection. `wantAwake` settles the race when a request resolves after we've stopped wanting it.
+let wakeLock = null, wantAwake = false;
+async function keepAwake(on) {
+  wantAwake = on;
+  try {
+    if (on && !wakeLock && navigator.wakeLock && document.visibilityState === "visible") {
+      const lock = await navigator.wakeLock.request("screen");
+      lock.addEventListener("release", () => { if (wakeLock === lock) wakeLock = null; });
+      wakeLock = lock;
+      if (!wantAwake) keepAwake(false);
+    } else if (!on && wakeLock) {
+      const lock = wakeLock; wakeLock = null; await lock.release();
+    }
+  } catch {}
+}
+
 function refreshPhaseUI(phase) {
   const prev = state.phase;
   state.phase = phase;
+  keepAwake(phase === "buffer" || phase === "play");
   $("timeLbl").textContent = phase === "buffer" ? "starts in" : "time left";
   if (phase === "play" && prev !== "play") {
     showLetter(true);
@@ -1053,7 +1165,7 @@ function renderControls() {
   } else if (phase === "play") {
     if (isHost()) {
       const er = document.createElement("button");
-      er.className = "btn"; er.textContent = "End round";
+      er.className = "btn"; er.textContent = "End round"; er.disabled = !netReady;
       er.addEventListener("click", hostEndRound);
       controlsEl.appendChild(er);
     }
@@ -1107,18 +1219,35 @@ function startTicker() {
   tick();
   ticker = setInterval(tick, 250);
 }
-function stopTicker() { if (ticker) { clearInterval(ticker); ticker = null; } }
+function stopTicker() { if (ticker) { clearInterval(ticker); ticker = null; } keepAwake(false); }
 
 /* ---------------- Room + round lifecycle ---------------- */
-function ensurePid(room) {
-  let pid = store.pid(room);
-  if (!pid) { pid = "p" + Math.random().toString(36).slice(2, 10); store.savePid(room, pid); }
-  return pid;
+// Player ids aren't chosen by the client: the server derives them from a per-room secret only
+// this browser knows, so nobody else can connect as us. We compute the same id locally because
+// it's needed before (or without) a connection. Must match derivePid in worker/src/index.js.
+async function derivePid(room, secret) {
+  const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(room + ":" + secret)));
+  const A = "abcdefghijklmnopqrstuvwxyz234567";
+  let out = "", bits = 0, val = 0;
+  for (const b of hash) {
+    val = (val << 8) | b; bits += 8;
+    while (bits >= 5) { bits -= 5; out += A[(val >>> bits) & 31]; }
+    val &= (1 << bits) - 1;
+    if (out.length >= 12) break;
+  }
+  return "p" + out.slice(0, 12);
 }
 
-function enterRoom(roomId, created) {
+let enterSeq = 0; // bumped per navigation, so an enterRoom still deriving its id knows it was superseded
+
+async function enterRoom(roomId, created) {
   roomId = (roomId || "").toLowerCase();
   if (!roomId) return;
+  const seq = ++enterSeq;
+  let pid;
+  try { pid = await derivePid(roomId, store.secret(roomId)); }
+  catch { toast("This browser can't run multiplayer (needs a secure connection)"); return; }
+  if (seq !== enterSeq) return;
   teardownNet();
   stopTicker(); stopKlaxon();
 
@@ -1127,19 +1256,20 @@ function enterRoom(roomId, created) {
   // reconciles anything that changed while we were away.
   const effectiveCreated = !!created || store.created(roomId);
   if (effectiveCreated) store.saveCreated(roomId);
-  myPid = ensurePid(roomId);
+  myPid = pid;
   const savedScores = store.sessionScores(roomId);
   const savedRound = store.roundState(roomId);
   const savedEpoch = store.epoch(roomId);
 
   roster = {}; peerAnswers = {}; myAnswersShared = false;
-  sessionScores = savedScores || {};
+  sessionScores = {};
   netReady = false; netOffline = false;
   state = { room: roomId, created: effectiveCreated, round: 0, seed: null, start: null, durationMs: chosenDurationMs, cats: [], letter: "", ended: false, revealed: false, phase: "lobby", epoch: savedEpoch };
+  mergeSavedScores(savedScores); // after `state.room` is this room, since recordScore saves to it
 
   homeEl.style.display = "none";
   gameEl.style.display = "block";
-  document.body.classList.remove("review", "critical", "panic");
+  document.body.classList.remove("review", "critical", "panic", "insummary");
   document.body.classList.add("inlobby");
   buzzerEl.classList.remove("show");
   letterEl.textContent = "?";
@@ -1152,8 +1282,9 @@ function enterRoom(roomId, created) {
   const savedSummary = store.summary(roomId);
   if (savedSummary) {
     showSummary();
-  } else if (savedRound && savedRound.seed && savedRound.start) {
-    applyRound(savedRound.seed, savedRound.start, savedRound.round, savedRound.durationMs, savedRound.ended, savedRound.customCats);
+  } else {
+    const r = savedRound && cleanRound({ ...savedRound, startAt: savedRound.start });
+    if (r) applyRound(r.seed, r.startAt, r.round, r.durationMs, savedRound.ended, r.customCats);
   }
 
   onNetStatus();
@@ -1164,18 +1295,6 @@ function saveRoundSnapshot() {
   if (!state.room) return;
   store.saveRoundState(state.room, { seed: state.seed, start: state.start, round: state.round, durationMs: state.durationMs, ended: state.ended, customCats: state.customCats });
   store.saveEpoch(state.room, state.epoch || 0);
-}
-
-// Round numbers restart at 0 every "New game", so comparing round numbers alone can't tell
-// "an earlier round of a new game" from "an old round of the game that just finished" — a
-// peer stuck on round 3 of a finished game would reject round 1 of the next game as stale.
-// Epoch (bumped on every reset) disambiguates that; within the same epoch, round order rules.
-function isNewerRound(epoch, round) {
-  if (epoch !== (state.epoch || 0)) return epoch > (state.epoch || 0);
-  return round > state.round;
-}
-function isSameRound(epoch, round) {
-  return epoch === (state.epoch || 0) && round === state.round;
 }
 
 // `ended` lets a round resync carry "this round is already over" even when the round
@@ -1216,6 +1335,7 @@ function applyRound(seed, startAt, round, durationMs, ended, customCats) {
 }
 
 function startRoundAsHost() {
+  if (hostActionBlocked()) return;
   const seed = newSeed();
   const startAt = Date.now() + LEADIN_MS;
   const round = state.round + 1;
@@ -1228,7 +1348,8 @@ function startRoundAsHost() {
 
 function hostEndRound() {
   if (state.ended || state.phase === "over" || !state.seed) return;
-  if (net && !netOffline) { try { net.sendEndNow({ round: state.round }); } catch {} }
+  if (hostActionBlocked()) return;
+  if (net && !netOffline) { try { net.sendEndNow({ seed: state.seed }); } catch {} }
   endRound();
 }
 
@@ -1261,7 +1382,13 @@ function enterReview() {
 }
 
 /* ---------------- Multiplayer review ---------------- */
-function normalise(s) { return (s || "").trim().toLowerCase(); }
+// Two answers are duplicates if they match ignoring case, accents, punctuation, spacing and a
+// leading "the"/"a"/"an" — so "The Beatles" and "beatles!" collide. Letters and digits in any
+// script are kept, so non-Latin answers still compare.
+function normalise(s) {
+  return String(s || "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase()
+    .replace(/&/g, " and ").replace(/[^\p{L}\p{N}]+/gu, " ").trim().replace(/^(the|a|an) (?=.)/, "");
+}
 
 function reviewPlayers() {
   const mine = { pid: myPid, name: myName + " (you)", answers: store.ans(state.seed), me: true };
@@ -1316,13 +1443,13 @@ function spawnReaction(cat, pid, emoji, fromName) {
 
 function sendReaction(cat, pid, emoji) {
   spawnReaction(cat, pid, emoji, myName);
-  // Spamming is the point, but cap what goes over the wire at ~8/sec so a held-down tap
+  // Spamming is the point, but cap what goes over the wire at ~4/sec so a held-down tap
   // can't flood every peer's data channel. Local animation still plays for every tap.
   const now = Date.now();
   reactSendTimes = reactSendTimes.filter(t => now - t < 1000);
-  if (reactSendTimes.length >= 8) return;
+  if (reactSendTimes.length >= 4) return;
   reactSendTimes.push(now);
-  if (net && !netOffline) { try { net.sendReact({ cat, pid, emoji, round: state.round, epoch: state.epoch || 0, name: myName }); } catch {} }
+  if (net && !netOffline) { try { net.sendReact({ cat, pid, emoji, seed: state.seed, epoch: state.epoch || 0, name: myName }); } catch {} }
 }
 
 function renderReview() {
@@ -1414,11 +1541,11 @@ function renderReviewControls() {
   el.innerHTML = "";
   if (isHost()) {
     const nr = document.createElement("button");
-    nr.className = "btn primary"; nr.textContent = "New round";
+    nr.className = "btn primary"; nr.textContent = "New round"; nr.disabled = !netReady;
     nr.addEventListener("click", startRoundAsHost);
     el.appendChild(nr);
     const fin = document.createElement("button");
-    fin.className = "btn"; fin.textContent = "Finish game";
+    fin.className = "btn"; fin.textContent = "Finish game"; fin.disabled = !netReady;
     fin.addEventListener("click", hostFinish);
     el.appendChild(fin);
   } else {
@@ -1447,6 +1574,8 @@ function buildSummary() {
 // snapshot of whatever the host happened to know when they pressed Finish — so a late score
 // update, or a refresh on the summary screen, still converges to the correct final result.
 function hostFinish() {
+  if (hostActionBlocked()) return;
+  if (!confirm("Finish the game for everyone? This shows the final scores and can't be undone.")) return;
   if (state.room) store.saveSummary(state.room, true);
   if (net && !netOffline) { try { net.sendFinish({ scores: sessionScores }); } catch {} }
   showSummary();
@@ -1483,7 +1612,9 @@ function renderSummary(sum) {
       const nm = document.createElement("span");
       nm.className = "nm"; nm.textContent = p.name;
       const tot = document.createElement("span");
-      tot.className = "tot"; tot.innerHTML = "<b>" + p.total + "</b>";
+      tot.className = "tot";
+      const b = document.createElement("b"); b.textContent = p.total;
+      tot.appendChild(b);
       line.appendChild(nm); line.appendChild(tot);
       se.appendChild(line);
     });
@@ -1520,7 +1651,7 @@ function renderSummaryControls() {
   el.innerHTML = "";
   if (isHost()) {
     const again = document.createElement("button");
-    again.className = "btn primary"; again.textContent = "New game (reset scores)";
+    again.className = "btn primary"; again.textContent = "New game (reset scores)"; again.disabled = !netReady;
     again.addEventListener("click", hostRematch);
     el.appendChild(again);
   }
@@ -1533,7 +1664,8 @@ function renderSummaryControls() {
 function resetToLobby(epoch) {
   state.epoch = (typeof epoch === "number") ? epoch : (state.epoch || 0) + 1;
   sessionScores = {}; peerAnswers = {}; myAnswersShared = false;
-  state.round = 0; state.seed = null; state.start = null;
+  state.round = 0; state.seed = null; state.start = null; state.ended = false; state.revealed = false;
+  state.phase = "lobby"; state.cats = []; state.customCats = []; state.letter = "";
   if (state.room) { store.saveSessionScores(state.room, {}); store.clearRoundState(state.room); store.clearSummary(state.room); store.saveEpoch(state.room, state.epoch); }
   stopTicker(); stopKlaxon();
   buzzerEl.classList.remove("show");
@@ -1545,6 +1677,7 @@ function resetToLobby(epoch) {
 }
 
 function hostRematch() {
+  if (hostActionBlocked()) return;
   const nextEpoch = (state.epoch || 0) + 1;
   if (net && !netOffline) { try { net.sendReset({ epoch: nextEpoch }); } catch {} }
   resetToLobby(nextEpoch);
@@ -1655,19 +1788,17 @@ const TURNSTILE_SITE_KEY = LOCAL_DEV
 const PING_MS = 25000;      // keepalive; answered by Cloudflare's edge without waking the room
 const PONG_WAIT_MS = 10000; // no pong by then = the socket is dead, even if the browser hasn't noticed
 const OPEN_WAIT_MS = 10000; // give up on a connection attempt that never gets welcomed
-const OFFLINE_AFTER = 3;    // failed first attempts before offering solo play
-const CLOSE = { REPLACED: 4001, FULL: 4003, BAD_REQUEST: 4400, AUTH: 4401, RATE: 4429 };
+const OFFLINE_AFTER = 3;    // failed first attempts before showing "can't connect"
+const PAUSE_HIDDEN_MS = 10 * 60 * 1000; // disconnect a tab left in the background this long
+const CLOSE = { REPLACED: 4001, FULL: 4003, BAD_REQUEST: 4400, AUTH: 4401, OUTDATED: 4426, RATE: 4429 };
 
-let netStatus = "idle";     // connecting | verifying | online | reconnecting | offline | replaced | full | badroom
+let netStatus = "idle";     // connecting | verifying | online | reconnecting | paused | offline | replaced | outdated | full | badroom
 let netDetail = "";         // why the last attempt failed, for the status line
 
 function setNetStatus(s, detail) {
   netStatus = s;
   netDetail = detail || "";
   netReady = s === "online";
-  // "offline" states are the ones where we've given up on (or been refused) a live room, so
-  // the device falls back to hosting itself. "replaced" deliberately isn't one: that tab is
-  // stale and shouldn't start rounds of its own.
   netOffline = s === "offline" || s === "full" || s === "badroom";
   onNetStatus();
 }
@@ -1682,32 +1813,52 @@ function loadTurnstile() {
       const s = document.createElement("script");
       s.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
       s.async = true;
-      s.onload = () => (window.turnstile ? resolve(window.turnstile) : reject(new Error("verification unavailable")));
+      s.onload = () => {
+        if (window.turnstile) return resolve(window.turnstile);
+        turnstileLoading = null; // let the next attempt try loading it again
+        reject(new Error("verification unavailable"));
+      };
       s.onerror = () => { turnstileLoading = null; s.remove(); reject(new Error("couldn't load verification")); };
       document.head.appendChild(s);
     });
   }
   return turnstileLoading;
 }
+const CHALLENGE_WAIT_MS = 30000; // an invisible check that hasn't finished by now never will
+let cancelChallenge = null;      // set while a Turnstile widget is running
 async function turnstileToken() {
   const ts = await loadTurnstile();
   return new Promise((resolve, reject) => {
     const box = $("turnstileBox");
     const holder = document.createElement("div");
     $("turnstileSlot").appendChild(holder);
-    let id = null, settled = false;
+    let id = null, settled = false, interactive = false;
     const finish = (fn, v) => {
       if (settled) return;
       settled = true;
-      setTimeout(() => { try { if (id != null) ts.remove(id); } catch {} holder.remove(); box.classList.remove("show"); }, 0);
+      cancelChallenge = null;
+      clearTimeout(timer);
+      setTimeout(() => {
+        try { if (id != null) ts.remove(id); } catch {}
+        holder.remove();
+        box.classList.remove("show");
+        box.removeAttribute("role"); box.removeAttribute("aria-modal");
+      }, 0);
       fn(v);
     };
+    // Waiting on the player is fine; waiting on a widget that silently never loaded isn't.
+    const timer = setTimeout(() => { if (!interactive) finish(reject, new Error("verification timed out")); }, CHALLENGE_WAIT_MS);
+    cancelChallenge = (err) => finish(reject, err);
     try {
       id = ts.render(holder, {
         sitekey: TURNSTILE_SITE_KEY,
         appearance: "interaction-only",
         callback: (token) => finish(resolve, token),
-        "before-interactive-callback": () => box.classList.add("show"),
+        "before-interactive-callback": () => {
+          interactive = true;
+          box.setAttribute("role", "dialog"); box.setAttribute("aria-modal", "true");
+          box.classList.add("show");
+        },
         "error-callback": () => { finish(reject, new Error("verification failed")); return true; },
         "timeout-callback": () => finish(reject, new Error("verification timed out")),
         "unsupported-callback": () => finish(reject, new Error("browser not supported by verification"))
@@ -1740,6 +1891,7 @@ function getTicket(forceFresh) {
 }
 
 function teardownNet() {
+  if (cancelChallenge) cancelChallenge(new Error("left the room"));
   const n = net;
   net = null;
   netReady = false;
@@ -1773,7 +1925,7 @@ function netSend(n, t, d, to) {
 }
 
 async function connectNet(n) {
-  if (n !== net || n.stopped || n.connecting || n.ws) return;
+  if (n !== net || n.stopped || n.paused || n.connecting || n.ws) return;
   if (SERVER_URL.includes("REPLACE_ME") || TURNSTILE_SITE_KEY.includes("REPLACE_ME")) {
     setNetStatus("offline", "game server not configured");
     return;
@@ -1790,14 +1942,15 @@ async function connectNet(n) {
     n.freshTicket = false;
   } catch (e) {
     n.connecting = false;
-    if (n === net) scheduleRetry(n, e.message);
+    if (n !== net) return;
+    scheduleRetry(n, e.message);
     return;
   }
   n.connecting = false;
-  if (n !== net || n.stopped) return;
+  if (n !== net || n.stopped || n.paused) return;
 
   const url = SERVER_URL.replace(/^http/, "ws") + "/room/" + n.roomId +
-    "?pid=" + encodeURIComponent(myPid) + "&ticket=" + encodeURIComponent(ticket);
+    "?secret=" + encodeURIComponent(store.secret(n.roomId)) + "&ticket=" + encodeURIComponent(ticket);
   let ws;
   try { ws = new WebSocket(url); } catch { scheduleRetry(n, "can't reach the game server"); return; }
   n.ws = ws;
@@ -1820,7 +1973,13 @@ function socketGone(n, ws, code) {
   if (n !== net || n.ws !== ws) return;
   clearTimeout(n.openTimer); stopPing(n);
   dropSocket(n, code);
-  if (code === CLOSE.REPLACED) { setNetStatus("replaced"); return; }
+  if (code === CLOSE.REPLACED || code === CLOSE.OUTDATED) {
+    // This tab is out of the room for good: stop its clock so it can't end a round and
+    // overwrite the state the active tab shares through localStorage.
+    stopTicker(); stopKlaxon();
+    setNetStatus(code === CLOSE.REPLACED ? "replaced" : "outdated");
+    return;
+  }
   if (code === CLOSE.FULL) { setNetStatus("full"); return; }
   if (code === CLOSE.BAD_REQUEST) { setNetStatus("badroom"); return; }
   if (code === CLOSE.AUTH) { store.clearTicket(); n.freshTicket = true; scheduleRetry(n, "verification expired"); return; }
@@ -1828,14 +1987,27 @@ function socketGone(n, ws, code) {
   scheduleRetry(n, n.everConnected ? "connection lost" : "can't reach the game server");
 }
 
+// A tab left in the background drops its connection — each open socket keeps its room's sweep
+// running, which counts against the free plan — and reconnects when it's looked at again.
+function pauseNet() {
+  const n = net;
+  if (!n || n.stopped || ["replaced", "outdated", "full", "badroom"].includes(netStatus)) return;
+  n.paused = true;
+  clearTimeout(n.retryTimer); clearTimeout(n.openTimer); stopPing(n);
+  dropSocket(n, 1000);
+  setNetStatus("paused");
+}
+
 function scheduleRetry(n, reason) {
-  if (n !== net || n.stopped) return;
+  if (n !== net || n.stopped || n.paused) return;
   n.attempts++;
-  const base = Math.min(15000, 500 * Math.pow(2, Math.min(n.attempts - 1, 5)));
+  const base = Math.min(30000, 500 * Math.pow(2, Math.min(n.attempts - 1, 6)));
   const delay = base * (0.75 + Math.random() * 0.5);
   setNetStatus(n.everConnected ? "reconnecting" : (n.attempts >= OFFLINE_AFTER ? "offline" : "connecting"), reason);
   clearTimeout(n.retryTimer);
-  n.retryTimer = setTimeout(() => connectNet(n), delay);
+  // A hidden tab doesn't retry (the visibilitychange handler reconnects it on return), so a
+  // forgotten tab can't keep re-running Turnstile and using up the shared per-IP limits.
+  n.retryTimer = setTimeout(() => { if (!document.hidden) connectNet(n); }, delay);
 }
 
 // Retry right now instead of waiting out the backoff — the network came back, the tab came
@@ -1844,9 +2016,11 @@ function kickNet(force) {
   const n = net;
   if (!n || n.stopped) return;
   if (n.ws && n.ws.readyState === WebSocket.OPEN) { sendPing(n); return; }
+  if (!force && ["replaced", "outdated", "full", "badroom"].includes(netStatus)) return;
+  // Unpause first: a connect already in flight (fetching a ticket) then carries on by itself.
+  if (n.paused || (force && netStatus !== "online")) setNetStatus(n.everConnected ? "reconnecting" : "connecting");
+  n.paused = false;
   if (n.ws || n.connecting) return;
-  if (!force && (netStatus === "replaced" || netStatus === "full" || netStatus === "badroom")) return;
-  if (force && netStatus !== "online") setNetStatus(n.everConnected ? "reconnecting" : "connecting");
   clearTimeout(n.retryTimer);
   connectNet(n);
 }
@@ -1890,11 +2064,12 @@ function onWelcome(n, m) {
   clearTimeout(n.openTimer);
   n.attempts = 0;
   n.everConnected = true;
+  if (m.self !== myPid) console.error("server player id", m.self, "differs from ours", myPid);
   roster = {};
   (m.peers || []).forEach(p => {
-    if (!p || !p.pid || p.pid === myPid) return;
+    if (!p || !PID_RE.test(p.pid) || p.pid === myPid) return;
     const i = p.info || {};
-    roster[p.pid] = { name: i.name || "Player", created: !!i.created, dur: i.dur || null, pid: p.pid };
+    roster[p.pid] = { name: cleanName(i.name) || "Player", created: !!i.created, dur: cleanDur(i.dur), pid: p.pid };
   });
   setNetStatus("online");
   startPing(n);
@@ -1908,6 +2083,22 @@ function onWelcome(n, m) {
   }
 }
 
+function inSummary() { return document.body.classList.contains("insummary"); }
+
+// Orders another player's view of the current round against ours: >0 theirs wins, 0 same
+// round, <0 ours wins. A newer game (epoch) or later round wins. The same round number can
+// exist with two different boards (two hosts starting at once) — then the earlier start wins,
+// then the lower seed, so every device independently picks the same one.
+function compareRound(epoch, r) {
+  const mine = state.epoch || 0;
+  if (epoch !== mine) return epoch > mine ? 1 : -1;
+  if (!state.seed) return 1;
+  if (r.round !== state.round) return r.round > state.round ? 1 : -1;
+  if (r.seed === state.seed) return 0;
+  if (r.startAt !== state.start) return r.startAt < state.start ? 1 : -1;
+  return r.seed < state.seed ? 1 : -1;
+}
+
 // Game message handlers, keyed by message type. `meta.peerId` is the sender's player id, as
 // stamped by the server (not self-reported in the payload).
 const netHandlers = {
@@ -1915,54 +2106,60 @@ const netHandlers = {
   // nothing is persisted or re-synced; a player who missed one simply didn't see it fly by.
   react(data, meta) {
     if (!data || !document.body.classList.contains("review")) return;
-    if (data.round !== state.round || (data.epoch || 0) !== (state.epoch || 0)) return;
+    if (data.seed !== state.seed || cleanEpoch(data.epoch) !== (state.epoch || 0)) return;
     const fallbackName = (roster[meta.peerId] && roster[meta.peerId].name) || "";
-    spawnReaction(parseInt(data.cat, 10), String(data.pid || ""), data.emoji, String(data.name || fallbackName).slice(0, 20));
+    spawnReaction(parseInt(data.cat, 10), String(data.pid || ""), data.emoji, cleanName(data.name) || fallbackName);
   },
   // Every hello (first join, or a re-announce after a reconnect) triggers a full catch-up via
   // a single consolidated `sync` payload — round state, scores, and the finish summary if
   // applicable — from WHICHEVER player answers, not just the host, so the room converges even
-  // if the original host is the one who dropped and lost state.
+  // if the original host is the one who dropped and lost state. A `quiet` hello (a rename or
+  // new round length) only updates the roster: answering every keystroke with a full sync
+  // from every player would flood the room.
   hello(data, meta) {
     const peerId = meta.peerId;
-    roster[peerId] = { name: (data && data.name) || "Player", created: !!(data && data.created), dur: (data && data.dur) || null, pid: peerId };
+    roster[peerId] = { name: cleanName(data && data.name) || "Player", created: !!(data && data.created), dur: cleanDur(data && data.dur), pid: peerId };
     onNetStatus();
+    if (data && data.quiet) return;
     net.sendSync(syncPayload(), peerId);
     if (myAnswersShared && document.body.classList.contains("review")) net.sendAns(answerPayload(), peerId);
   },
-  state(data) {
-    if (!data || typeof data.startAt !== "number") return;
-    const epoch = typeof data.epoch === "number" ? data.epoch : 0;
-    if (state.seed) {
-      if (isSameRound(epoch, data.round)) {
-        // Same round we already have — the only new information a resend can carry is that
-        // it ended (ending early isn't clock-driven, so a player who missed that message, or
-        // joined mid-round, has no other way to learn it).
-        if (data.ended && !state.ended) endRound();
-        return;
-      }
-      if (!isNewerRound(epoch, data.round)) return; // stale
+  state(data, meta) {
+    const r = cleanRound(data);
+    if (!r) return;
+    const epoch = cleanEpoch(data.epoch);
+    if (inSummary() && epoch === (state.epoch || 0)) return; // the game's over; only a new game moves us on
+    const c = compareRound(epoch, r);
+    if (c === 0) {
+      // Same round we already have — the only new information a resend can carry is that
+      // it ended (ending early isn't clock-driven, so a player who missed that message, or
+      // joined mid-round, has no other way to learn it).
+      if (r.ended && !state.ended) endRound();
+      return;
     }
+    if (c < 0) { net.sendSync(syncPayload(), meta.peerId); return; } // they're behind (or lost a tie): show them ours
     if (epoch > (state.epoch || 0)) resetToLobby(epoch); // new game generation — drop stale scores first
-    applyRound(data.seed, data.startAt, data.round, data.durationMs, !!data.ended, data.customCats);
+    applyRound(r.seed, r.startAt, r.round, r.durationMs, r.ended, r.customCats);
   },
+  // Answers and scores name the game (epoch) and board (seed) they belong to, so ones from a
+  // player who was away while the game moved on can't land in the wrong round.
   ans(data, meta) {
-    if (!data) return;
+    if (!data || data.seed !== state.seed || cleanEpoch(data.epoch) !== (state.epoch || 0)) return;
     const pid = meta.peerId;
-    const fallbackName = (roster[pid] && roster[pid].name) || "Player";
-    peerAnswers[pid] = { name: data.name || fallbackName, answers: data.answers || {}, round: data.round };
-    if (sessionScores[pid] == null || sessionScores[pid].rounds[data.round] == null) {
-      recordScore(pid, data.name || fallbackName, data.round, 0); // show them on the board at 0 until they tick
+    const name = cleanName(data.name) || (roster[pid] && roster[pid].name) || "Player";
+    peerAnswers[pid] = { name, answers: cleanAnswers(data.answers), round: state.round };
+    if (sessionScores[pid] == null || sessionScores[pid].rounds[state.round] == null) {
+      recordScore(pid, name, state.round, 0); // show them on the board at 0 until they tick
     }
     if (document.body.classList.contains("review")) { renderReview(); renderScoreboard(); }
   },
   score(data, meta) {
-    if (!data) return;
-    if (recordScore(meta.peerId, data.name, data.round, data.score || 0, typeof data.ts === "number" ? data.ts : 0)) refreshScoreViews();
+    if (!data || data.seed !== state.seed || cleanEpoch(data.epoch) !== (state.epoch || 0)) return;
+    if (recordScore(meta.peerId, data.name, state.round, data.score, data.ts)) refreshScoreViews();
   },
   sync(data) {
     if (!data) return;
-    const epoch = typeof data.epoch === "number" ? data.epoch : 0;
+    const epoch = cleanEpoch(data.epoch);
     if (epoch < (state.epoch || 0)) return; // they're behind us; their scores are for a game we've moved past
     if (epoch > (state.epoch || 0)) {
       // A newer game generation than the one we're tracking — round numbers restart at 0
@@ -1973,44 +2170,48 @@ const netHandlers = {
     mergeSessionScores(data.scores); // safe now: same epoch on both sides
     if (data.summary) {
       if (state.room) store.saveSummary(state.room, true);
-      if (!document.body.classList.contains("insummary")) showSummary();
+      if (!inSummary()) showSummary();
       return;
     }
-    if (data.round && typeof data.round.startAt === "number") {
-      const r = data.round;
-      if (!state.seed || isNewerRound(epoch, r.round)) {
-        applyRound(r.seed, r.startAt, r.round, r.durationMs, !!r.ended, r.customCats);
-      } else if (isSameRound(epoch, r.round) && r.ended && !state.ended) {
-        endRound();
-      }
+    if (inSummary()) return; // a player who missed the finish mustn't pull us back into their round
+    const r = cleanRound(data.round);
+    if (r) {
+      const c = compareRound(epoch, r);
+      if (c > 0) applyRound(r.seed, r.startAt, r.round, r.durationMs, r.ended, r.customCats);
+      else if (c === 0 && r.ended && !state.ended) endRound();
+      // c < 0: ours wins; they'll adopt it from the sync we send in reply to their hello.
     }
-    // Otherwise the sender is in the lobby too (no round, no summary) — if we just adopted
-    // their epoch above, we're already correctly there; nothing further to do.
-    mergeReviewAnswers(data.answers);
+    // Only merge answers for the board we're actually on — the sender may still be on an
+    // older round's review.
+    if (r && r.seed === state.seed) mergeReviewAnswers(data.answers);
   },
   finish(data) {
     if (data && data.scores) mergeSessionScores(data.scores);
     if (state.room) store.saveSummary(state.room, true);
     showSummary();
   },
-  reset(data) { resetToLobby(data && typeof data.epoch === "number" ? data.epoch : undefined); },
+  reset(data) {
+    const epoch = cleanEpoch(data && data.epoch);
+    if (epoch > (state.epoch || 0)) resetToLobby(epoch);
+  },
   endnow(data) {
     if (state.ended || state.phase === "over" || !state.seed) return;
-    if (data && data.round != null && data.round !== state.round) return; // only end the current round
+    if (!data || data.seed !== state.seed) return; // only end the round we're actually playing
     endRound();
   }
 };
 
-function helloPayload() { return { name: myName, created: !!state.created, dur: chosenDurationMs, pid: myPid }; }
+function cleanDur(v) { return [60000, 120000, 180000, 300000].includes(v) ? v : null; }
+function helloPayload() { return { name: myName, created: !!state.created, dur: chosenDurationMs }; }
 function roundPayload() {
   return state.seed
     ? { seed: state.seed, startAt: state.start, round: state.round, durationMs: state.durationMs, ended: state.ended, customCats: state.customCats }
     : null;
 }
 // Everything this device knows about the current round's answers — its own plus anyone
-// else's it has learned — so a late/reconnecting peer can recover a submitted answer even
+// else's it has learned — so a late/reconnecting player can recover a submitted answer even
 // if the player who submitted it has since disconnected entirely (no one else would ever
-// relay it otherwise: each peer only ever pushed its OWN answer, never forwarded others').
+// relay it otherwise: each player only ever pushes its OWN answer, never forwards others').
 function reviewAnswersPayload() {
   if (!document.body.classList.contains("review") || !state.seed) return null;
   const all = {};
@@ -2026,11 +2227,11 @@ function syncPayload() {
     epoch: state.epoch || 0,
     scores: sessionScores,
     round: roundPayload(),
-    summary: document.body.classList.contains("insummary"),
+    summary: inSummary(),
     answers: reviewAnswersPayload()
   };
 }
-function answerPayload() { return { name: myName, answers: store.ans(state.seed), round: state.round, pid: myPid }; }
+function answerPayload() { return { name: myName, answers: store.ans(state.seed), epoch: state.epoch || 0, seed: state.seed }; }
 function broadcastAnswers() {
   if (net && !netOffline && net.sendAns(answerPayload())) myAnswersShared = true;
 }
@@ -2044,9 +2245,18 @@ function hostId() {
   return all.map(p => p.id).sort()[0];
 }
 function isHost() {
-  if (netOffline) return true;                                  // solo / offline: you host yourself
+  if (netStatus === "replaced" || netStatus === "outdated") return false; // this tab is out of the room
   if (Object.keys(roster).length === 0) return !!state.created; // alone in the room: only the creator hosts
   return hostId() === selfKey();                                // with peers: creator wins (via hello.created), else lowest id
+}
+
+// Host actions need a live room. Starting a round while disconnected would start it on this
+// device only, and the room would end up on two boards. (The buttons are disabled too; this
+// covers a click that lands just as the connection drops.)
+function hostActionBlocked() {
+  if (netReady) return false;
+  toast("Not connected — try again in a moment");
+  return true;
 }
 
 /* ---------------- Presence / roster / name ---------------- */
@@ -2112,19 +2322,20 @@ function renderLobbyControls() {
     const start = document.createElement("button");
     start.className = "btn primary"; start.textContent = "Start round";
     start.addEventListener("click", startRoundAsHost);
+    start.disabled = !netReady;
     el.appendChild(start);
     el.appendChild(copy);
-    if (hint) hint.textContent = netOffline
-      ? "Offline — others can't join, but you can still play solo."
-      : "You're the host. Share the link, then start when everyone's in.";
+    if (hint) hint.textContent = netReady
+      ? "You're the host. Share the link, then start when everyone's in."
+      : "You're the host. You can start once you're connected.";
   } else {
     el.appendChild(copy);
     if (hint) hint.textContent = "Waiting for the host to start the round…";
   }
 }
 const NET_LABELS = {
-  idle: "", connecting: "connecting…", verifying: "verifying…", reconnecting: "reconnecting…",
-  offline: "offline", replaced: "open in another tab", full: "room full", badroom: "invalid room"
+  idle: "", connecting: "connecting…", verifying: "verifying…", reconnecting: "reconnecting…", paused: "paused",
+  offline: "offline", replaced: "open in another tab", outdated: "refresh needed", full: "room full", badroom: "invalid room"
 };
 // The longer explanation of the connection state, for the lobby note and the "who's here"
 // panel. `action` is a button label when retrying by hand makes sense.
@@ -2135,8 +2346,10 @@ function netMessage() {
     case "connecting": return { text: "Connecting to the game server…" + (netDetail ? " retrying" + why : "") };
     case "verifying": return { text: "Checking this browser before joining…" };
     case "reconnecting": return { text: "Lost connection — reconnecting…" + why + " Your answers are safe on this device.", action: "Retry now" };
-    case "offline": return { text: "Can't connect" + why + ". Still retrying — you can play solo meanwhile, but others won't see this game.", action: "Retry now" };
+    case "paused": return { text: "Disconnected while this tab was in the background.", action: "Reconnect" };
+    case "offline": return { text: "Can't connect" + why + ". Still retrying.", action: "Retry now" };
     case "replaced": return { text: "This room is open in another tab or window.", action: "Use this tab" };
+    case "outdated": return { text: "A newer version of the game is out.", action: "Refresh" };
     case "full": return { text: "This room is full (16 players max).", action: "Try again" };
     case "badroom": return { text: "That room link isn't valid — start a new game instead." };
     default: return { text: "" };
@@ -2148,10 +2361,28 @@ function renderNetMessage(el, msg) {
   if (msg.action) {
     const b = document.createElement("button");
     b.type = "button"; b.className = "linkbtn"; b.textContent = msg.action;
-    b.addEventListener("click", (e) => { e.stopPropagation(); kickNet(true); });
+    b.addEventListener("click", (e) => { e.stopPropagation(); netAction(); });
     el.appendChild(document.createTextNode(" "));
     el.appendChild(b);
   }
+}
+// "Use this tab" / "Refresh" reload, so the tab picks up whatever the active tab saved meanwhile.
+function netAction() {
+  if (netStatus === "replaced" || netStatus === "outdated") location.reload();
+  else kickNet(true);
+}
+// Covers the page when this tab can no longer play (the room moved to another tab, or the page
+// is out of date). `inert` keeps focus and typing out of the game underneath.
+function renderBlocker() {
+  const el = $("blocker");
+  const on = netStatus === "replaced" || netStatus === "outdated";
+  el.hidden = !on;
+  gameEl.inert = on;
+  if (!on) return;
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+  $("blockerTitle").textContent = netStatus === "replaced" ? "Open in another tab" : "Refresh to keep playing";
+  $("blockerText").textContent = netMessage().text;
+  $("blockerBtn").textContent = netMessage().action;
 }
 function onNetStatus() {
   const countEl = $("playerCount");
@@ -2179,6 +2410,11 @@ function onNetStatus() {
   }
   renderRoster();
   renderLobbyControls();
+  // Who's host depends on who's here, so redraw whichever screen's host controls are showing.
+  if (document.body.classList.contains("review")) renderReviewControls();
+  if (inSummary()) renderSummaryControls();
+  if (state.phase === "play") renderControls();
+  renderBlocker();
 }
 
 /* ---------------- Wiring ---------------- */
@@ -2200,12 +2436,18 @@ function doJoin() {
 $("joinBtn").addEventListener("click", doJoin);
 $("joinInput").addEventListener("keydown", e => { if (e.key === "Enter") doJoin(); });
 
+let renameTimer = null;
 $("nameInput").addEventListener("input", () => {
-  myName = ($("nameInput").value || "").trim().slice(0, 20) || defaultName();
+  const typed = cleanName($("nameInput").value);
+  if (!typed) return; // keep the last name while the field is empty; blur restores it
+  myName = typed;
   store.saveName(myName);
   renderRoster();
-  if (net && !netOffline) { try { net.sendHello(helloPayload()); } catch {} }
+  // Sent once typing pauses, and "quiet" so players just update their roster.
+  clearTimeout(renameTimer);
+  renameTimer = setTimeout(() => { if (net) net.sendHello({ ...helloPayload(), quiet: true }); }, 500);
 });
+$("nameInput").addEventListener("blur", () => { if (!cleanName($("nameInput").value)) $("nameInput").value = myName; });
 
 function effectiveLobbyDur() {
   if (isHost()) return chosenDurationMs;
@@ -2234,7 +2476,7 @@ $("durationSeg").addEventListener("click", (e) => {
     store.saveDur(v);
     if (state.phase === "lobby") state.durationMs = v;
     syncDurationSeg();
-    if (net && !netOffline) { try { net.sendHello(helloPayload()); } catch {} } // tell guests the new length
+    if (net) net.sendHello({ ...helloPayload(), quiet: true }); // tell guests the new length
   }
 });
 
@@ -2258,6 +2500,7 @@ $("customCatsInput").addEventListener("input", () => {
 $("brandHome").addEventListener("click", () => { location.hash = ""; showHome(); });
 
 function showHome() {
+  enterSeq++;
   teardownNet();
   stopTicker(); stopKlaxon();
   gameEl.style.display = "none";
@@ -2283,26 +2526,49 @@ function route() {
 window.addEventListener("hashchange", route);
 
 /* ---------------- Resilience: reconnect + audio unlock ---------------- */
-// iOS suspends a fresh AudioContext until it's resumed inside a real user gesture, and
-// guests never otherwise trigger one (only the host's "Start round" click did). Resuming
-// on every tap — and whenever the tab comes back to the foreground — keeps the klaxon
-// working even after the context gets auto-suspended by a screen lock or backgrounding.
-document.addEventListener("pointerdown", () => getCtx(), { passive: true });
+// iOS only lets audio start inside a real user gesture — and a tap's pointerdown isn't one;
+// its touchend is (as are click and keydown). Guests may never click a button before time's
+// up, only tap into answer boxes and type, so unlock on all of these. The silent one-sample
+// buffer is what older iOS needs to actually allow sound. Resuming on every gesture (and on
+// returning to the tab) also recovers a context iOS suspended after a screen lock.
+function unlockAudio() {
+  const ctx = getCtx();
+  if (!ctx || ctx.state === "running") return;
+  try {
+    const src = ctx.createBufferSource();
+    src.buffer = ctx.createBuffer(1, 1, 22050);
+    src.connect(ctx.destination);
+    src.start(0);
+  } catch {}
+}
+["pointerdown", "touchend", "click", "keydown"].forEach(type =>
+  document.addEventListener(type, unlockAudio, { capture: true, passive: true }));
 
 // Coming back to the foreground, network changes and back/forward-cache restores are exactly
 // when a socket has silently died. None of these force a reconnect: an open socket just gets
 // a health-check ping (a dead one fails it within seconds), and a closed one skips the rest
 // of its backoff wait.
-let hiddenSince = null;
+let hiddenSince = null, pauseTimer = null;
 document.addEventListener("visibilitychange", () => {
   getCtx();
-  if (document.visibilityState === "hidden") { hiddenSince = Date.now(); return; }
+  if (document.visibilityState === "hidden") {
+    hiddenSince = Date.now();
+    pauseTimer = setTimeout(pauseNet, PAUSE_HIDDEN_MS);
+    return;
+  }
+  clearTimeout(pauseTimer);
+  if (state.phase === "buffer" || state.phase === "play") keepAwake(true); // the OS drops the lock when hidden
   const wasHiddenAWhile = hiddenSince && (Date.now() - hiddenSince > 5000);
   hiddenSince = null;
-  if (wasHiddenAWhile) kickNet();
+  // Retries skip while hidden, so a tab coming back with no socket reconnects now.
+  if (wasHiddenAWhile || !(net && net.ws)) kickNet();
 });
 window.addEventListener("pageshow", (e) => { if (e.persisted) kickNet(); });
 window.addEventListener("online", () => kickNet());
+
+// The only way past an unsolvable challenge is out: leaving tears down the connection, which
+// cancels the widget.
+$("tsLeave").addEventListener("click", () => { location.hash = ""; showHome(); });
 
 $("codepill").addEventListener("click", (e) => {
   e.stopPropagation();

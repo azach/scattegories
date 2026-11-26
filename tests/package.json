@@ -1,0 +1,13 @@
+{
+  "name": "letter-round-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "protocol": "node protocol.mjs",
+    "e2e": "node e2e.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "^1",
+    "ws": "^8"
+  }
+}
