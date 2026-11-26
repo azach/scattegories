@@ -58,8 +58,9 @@ Abuse protection:
 
 1. **Origin allowlist** — only pages served from `ALLOWED_ORIGINS` (in `wrangler.toml`) can connect.
 2. **Turnstile** — the page gets a [Cloudflare Turnstile](https://developers.cloudflare.com/turnstile/) token
-   (usually invisible) and exchanges it at `POST /session` for a signed ticket valid for 12 hours. Every
-   WebSocket connection must carry a valid ticket.
+   (usually invisible; if Cloudflare wants a click, a dialog asks for it) and exchanges it at `POST /session`
+   for a signed ticket valid for 7 days. Every WebSocket connection must carry a valid ticket. Rotating
+   `SESSION_SECRET` invalidates all tickets.
 3. **Strict room codes and player ids** — anything else is rejected before a Durable Object is created.
 4. **Per-room limits** — 16 players, 64 KB messages, and a per-connection message rate limit.
 

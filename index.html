@@ -397,17 +397,21 @@
     background: none; border: 0; padding: 0; font: inherit; color: var(--ink); font-weight: 700;
     text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
   }
-  /* Turnstile renders invisibly; this box only becomes visible if it asks for an interaction */
-  .turnstile-box {
-    position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 1000;
-    pointer-events: none;
-  }
-  .turnstile-box .tslabel { display: none; }
+  /* Turnstile normally runs invisibly. If Cloudflare wants a click, this becomes a dialog over
+     a dimmed page — missing it means never connecting, so it mustn't be subtle. */
+  .turnstile-box { position: fixed; left: 0; top: 0; z-index: 1000; pointer-events: none; }
+  .turnstile-box .tstitle, .turnstile-box .tslabel { display: none; }
   .turnstile-box.show {
-    pointer-events: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
-    padding: 12px 14px; box-shadow: 0 10px 30px rgba(0,0,0,.25);
+    right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; padding: 20px;
+    background: rgba(20, 14, 4, .55); pointer-events: auto;
   }
-  .turnstile-box.show .tslabel { display: block; font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+  .turnstile-box.show .tscard {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 24px;
+    max-width: 380px; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,.35);
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+  }
+  .turnstile-box.show .tstitle { display: block; font-size: 20px; font-weight: 700; color: var(--ink); }
+  .turnstile-box.show .tslabel { display: block; font-size: 14px; color: var(--muted); margin-bottom: 6px; }
 
   /* summary screen */
   .summary { display: none; }
@@ -628,7 +632,13 @@
 
 <div class="flash" aria-hidden="true"></div>
 <div class="toast" id="toast"></div>
-<div class="turnstile-box" id="turnstileBox"><div class="tslabel">Quick check before you join…</div></div>
+<div class="turnstile-box" id="turnstileBox" role="dialog" aria-modal="true" aria-labelledby="tsTitle">
+  <div class="tscard">
+    <div class="tstitle" id="tsTitle">One quick check</div>
+    <div class="tslabel">Cloudflare needs to confirm you're a person before you can join the room.</div>
+    <div id="turnstileSlot"></div>
+  </div>
+</div>
 
 <script>
 "use strict";
@@ -1681,7 +1691,7 @@ async function turnstileToken() {
   return new Promise((resolve, reject) => {
     const box = $("turnstileBox");
     const holder = document.createElement("div");
-    box.appendChild(holder);
+    $("turnstileSlot").appendChild(holder);
     let id = null, settled = false;
     const finish = (fn, v) => {
       if (settled) return;
@@ -1703,7 +1713,7 @@ async function turnstileToken() {
   });
 }
 
-// A ticket is the server's signed "this browser passed Turnstile" (valid ~12h), so
+// A ticket is the server's signed "this browser passed Turnstile" (valid 7 days), so
 // reconnects — screen locks, flaky wifi — don't each need a fresh challenge.
 let ticketInFlight = null;
 function getTicket(forceFresh) {

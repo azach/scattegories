@@ -7,7 +7,7 @@
 //
 // Abuse protection, outermost first:
 //   1. Origin allowlist — browsers can't forge Origin, so no other site can use this backend.
-//   2. Turnstile — POST /session exchanges a Turnstile token for a signed ticket (HMAC, 12h),
+//   2. Turnstile — POST /session exchanges a Turnstile token for a signed ticket (HMAC, 7 days),
 //      and every WebSocket upgrade must carry a valid ticket. Scripts can't get one without
 //      passing a challenge.
 //   3. Strict room codes / player ids — junk URLs never instantiate a Durable Object.
@@ -17,7 +17,7 @@ import { DurableObject } from "cloudflare:workers";
 
 const ROOM_RE = /^[a-z]{5}$/;
 const PID_RE = /^p[a-z0-9]{4,16}$/;
-const TICKET_TTL_S = 12 * 60 * 60;
+const TICKET_TTL_S = 7 * 24 * 60 * 60;
 const MAX_PLAYERS = 16;
 const MAX_MSG_BYTES = 64 * 1024;
 const RATE_WINDOW_MS = 10_000;
@@ -116,7 +116,13 @@ async function handleSession(request, env, origin) {
   } catch {
     return json({ error: "verification unavailable" }, 502, origin);
   }
-  if (!outcome || outcome.success !== true) return json({ error: "verification failed" }, 403, origin);
+  if (!outcome || outcome.success !== true) {
+    // Turnstile's error codes (e.g. "invalid-input-secret") say whether the fault is the
+    // visitor's token or this server's config, and reveal nothing secret.
+    const codes = (outcome && outcome["error-codes"]) || [];
+    console.log("turnstile rejected", JSON.stringify({ codes, hostname: outcome && outcome.hostname }));
+    return json({ error: "verification failed", codes }, 403, origin);
+  }
 
   const exp = Math.floor(Date.now() / 1000) + TICKET_TTL_S;
   const ticket = exp + "." + b64url(await hmac(env.SESSION_SECRET, String(exp)));
